@@ -5,8 +5,12 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from dotenv import load_dotenv
 from src.models.event import CalendarEvent
 from PySide6.QtGui import QColor
+
+# .env 파일 로드
+load_dotenv()
 
 # 읽기 권한 설정
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
@@ -26,9 +30,21 @@ GOOGLE_COLORS = {
     "11": "#dc2127"  # Tomato
 }
 
+# Google OAuth2 클라이언트 설정 (.env 환경 변수 사용)
+CLIENT_CONFIG = {
+    "installed": {
+        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        "project_id": os.getenv("GOOGLE_PROJECT_ID"),
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+        "redirect_uris": ["http://localhost"]
+    }
+}
+
 class CalendarService:
-    def __init__(self, credentials_path='credentials.json', token_path='token.json'):
-        self.credentials_path = credentials_path
+    def __init__(self, token_path='token.json'):
         self.token_path = token_path
         self.creds = None
         self.service = None
@@ -44,11 +60,9 @@ class CalendarService:
             if self.creds and self.creds.expired and self.creds.refresh_token:
                 self.creds.refresh(Request())
             else:
-                if not os.path.exists(self.credentials_path):
-                    raise FileNotFoundError(f"'{self.credentials_path}' 파일이 필요합니다. Google Cloud Console에서 다운로드해 주세요.")
-                
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_path, SCOPES)
+                # 로컬 .env 또는 환경 변수에 설정된 CLIENT_CONFIG를 사용합니다.
+                flow = InstalledAppFlow.from_client_config(
+                    CLIENT_CONFIG, SCOPES)
                 self.creds = flow.run_local_server(port=0)
             
             # 자격 증명을 저장합니다.

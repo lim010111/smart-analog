@@ -10,4 +10,10 @@ dependencies = [
     "google-auth-oauthlib>=1.2.4",
     "pyinstaller>=6.18.0",
     "pyside6>=6.10.2",
+    "python-dotenv>=1.2.1",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.18.0",
 ]

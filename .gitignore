@@ -9,9 +9,18 @@ wheels/
 # Virtual environments
 .venv
 
-# Credential.json
+# Credential & Token
 credentials.json
 token.json
+.env
+
+# OS
 .DS_Store
+Thumbs.db
+
+# IDE
 .vscode/
 .idea/
+
+# Logs
+*.log

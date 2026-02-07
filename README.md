@@ -24,26 +24,15 @@
 
 **Python 3.13+** 환경과 **[uv](https://github.com/astral-sh/uv)** 패키지 매니저를 권장합니다.
 
-### 1. 사전 준비 (Google Cloud Console)
+### 1. 사전 준비 (배포자/개발자 전용)
 
-1.  [Google Cloud Console](https://console.cloud.google.com/)에서 새 프로젝트를 생성합니다.
-2.  **Google Calendar API**를 활성화합니다.
-3.  **OAuth 동의 화면**을 구성합니다. (테스트 사용자 등록 필요)
-4.  **사용자 인증 정보(Credentials)** > **OAuth 2.0 클라이언트 ID**를 생성하고 `credentials.json` 파일을 다운로드합니다.
-5.  다운로드한 `credentials.json` 파일을 프로젝트 최상위 디렉토리에 위치시킵니다.
+> [!NOTE]
+> 본 앱은 배포용 클라이언트 ID가 내장되어 있어 일반 사용자는 별도의 설정 파일이 필요하지 않습니다.
 
-### 2. 프로젝트 설정
+1.  (개발 시에만 필요) Google Cloud Console에서 Google Calendar API를 활성화합니다.
+2.  `uv` 또는 PyInstaller를 통해 빌드된 앱을 실행합니다.
 
-```bash
-# 저장소 복제 (예시)
-git clone <repository-url>
-cd clock_widget
-
-# 의존성 설치 (uv 사용 시)
-uv sync
-```
-
-### 3. 실행
+### 2. 실행
 
 ```bash
 uv run src/main.py
@@ -58,20 +47,11 @@ uv run src/main.py
 ```plaintext
 clock_widget/
 ├── src/
-│   ├── core/
-│   │   └── theme.py        # 다크/라이트 테마 색상 정의
-│   ├── models/
-│   │   └── event.py        # 캘린더 일정 데이터 모델 (dataclass)
-│   ├── services/
-│   │   └── calendar.py     # Google Calendar API 연동 및 데이터 처리
-│   ├── ui/
-│   │   ├── clock.py        # 아날로그 시계 및 일정 렌더링 (핵심 UI)
-│   │   └── menu.py         # 우클릭 컨텍스트 메뉴 정의
-│   └── main.py             # 앱 진입점 (Entry Point) & 윈도우 설정
-├── credentials.json        # Google OAuth2 인증 정보 (사용자가 직접 추가)
-├── token.json              # 사용자 인증 토큰 (자동 생성됨)
-├── pyproject.toml          # 프로젝트 의존성 관리 설정
-└── README.md               # 프로젝트 설명 파일
+│   ├── ... (생략)
+│   └── main.py             # 앱 진입점
+├── token.json              # 사용자 인증 토큰 (최초 로그인 시 자동 생성됨)
+├── pyproject.toml          # 설정 파일
+└── README.md               # 가이드
 ```
 
 ---
