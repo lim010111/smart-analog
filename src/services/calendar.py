@@ -1,4 +1,5 @@
 import os
+import sys
 import datetime
 import pickle
 from google.auth.transport.requests import Request
@@ -9,8 +10,18 @@ from dotenv import load_dotenv
 from src.models.event import CalendarEvent
 from PySide6.QtGui import QColor
 
-# .env 파일 로드
-load_dotenv()
+def get_resource_path(relative_path):
+    """PyInstaller의 임시 폴더 또는 로컬 소스 폴더의 절대 경로를 반환합니다."""
+    try:
+        # PyInstaller에 의해 빌드된 경우 _MEIPASS 변수가 생성됨
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+# .env 파일 로드 (절대 경로 보정)
+env_path = get_resource_path(".env")
+load_dotenv(env_path)
 
 # 읽기 권한 설정
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
