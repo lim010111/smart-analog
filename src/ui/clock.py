@@ -1,0 +1,179 @@
+import math
+import datetime
+from PySide6.QtCore import Qt, QTimer, QTime, QPoint, QRect
+from PySide6.QtGui import QPainter, QColor, QPolygon, QBrush, QPen
+from PySide6.QtWidgets import QWidget
+from src.core.theme import THEMES
+
+class AnalogClock(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.current_theme_name = "dark"
+        self._always_on_top = True
+        self.events = [] # 캘린더 이벤트 리스트
+        
+        # 기본 윈도우 플래그는 관리를 위해 Main에서 처리하도록 위젯 속성만 설정
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        
+        # 타이머 설정 (부드러운 업데이트를 위해 50ms 간격)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(50)
+        
+        self.resize(300, 300)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 전체 영역 클릭 감지용 배경
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 1))
+
+        side = min(self.width(), self.height())
+        time_now = QTime.currentTime()
+        theme = THEMES[self.current_theme_name]
+
+        # 중앙으로 이동 및 스케일 조정
+        painter.translate(self.width() / 2, self.height() / 2)
+        painter.scale(side / 200.0, side / 200.0)
+
+        # 시계 배경 원
+        painter.setPen(QPen(theme["border"], 2))
+        painter.setBrush(QBrush(theme["face"]))
+        painter.drawEllipse(-95, -95, 190, 190)
+
+        # 일정(Calendar Events) 그리기 - 배경 위에, 눈금 아래에 위치
+        self.draw_calendar_events(painter)
+
+        # 눈금 그리기 (시간)
+        painter.setPen(QPen(theme["ticks"], 2))
+        for i in range(12):
+            painter.drawLine(85, 0, 90, 0)
+            painter.rotate(30.0)
+
+        # 눈금 그리기 (분/초 보조 눈금 - 15분 단위 분할)
+        painter.setPen(QPen(theme["ticks"], 1))
+        for j in range(48):
+            if j % 4 != 0: # 12시간 눈금과 겹치지 않는 경우만 그리기
+                painter.drawLine(88, 0, 90, 0)
+            painter.rotate(7.5) # 360 / 48 = 7.5도 (15분 단위)
+
+        # 시침
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(theme["hands"])
+        painter.save()
+        painter.rotate(30.0 * ((time_now.hour() + time_now.minute() / 60.0)))
+        painter.drawPolygon(QPolygon([QPoint(-4, 8), QPoint(4, 8), QPoint(0, -50)]))
+        painter.restore()
+
+        # 분침
+        painter.setBrush(theme["hands"])
+        painter.save()
+        painter.rotate(6.0 * (time_now.minute() + time_now.second() / 60.0))
+        painter.drawPolygon(QPolygon([QPoint(-3, 8), QPoint(3, 8), QPoint(0, -75)]))
+        painter.restore()
+
+        # 초침
+        painter.setBrush(QColor(255, 80, 80)) 
+        painter.save()
+        smooth_seconds = time_now.second() + time_now.msec() / 1000.0
+        painter.rotate(6.0 * smooth_seconds)
+        painter.drawPolygon(QPolygon([QPoint(-1, 15), QPoint(1, 15), QPoint(0, -85)]))
+        painter.restore()
+        
+        # 중앙 핀
+        painter.setBrush(theme["hands"])
+        painter.drawEllipse(-3, -3, 6, 6)
+
+        # 시간 숫자 표시 (1-12)
+        painter.setPen(QPen(theme["nums"]))
+        font = painter.font()
+        font.setBold(False)
+        font.setPointSize(9)
+        painter.setFont(font)
+        
+        for i in range(1, 13):
+            angle = (i * 30 - -270) * math.pi / 180.0
+            x = 72 * math.cos(angle)
+            y = 72 * math.sin(angle)
+            
+            rect_size = 20
+            painter.drawText(int(x - rect_size/2), int(y - rect_size/2), rect_size, rect_size, 
+                             Qt.AlignCenter, str(i))
+
+    def draw_calendar_events(self, painter):
+        """캘린더 일정을 시계 판 위에 시각화합니다."""
+        if not self.events:
+            return
+
+        # 현재 로컬 시간 기준 (시계 바늘과 일치시키기 위함)
+        now_dt = datetime.datetime.now().astimezone()
+        
+        for event in self.events:
+            # Google API로부터 온 Aware Datetime을 사용자의 로컬 타임존으로 변환
+            # (start_time.hour 등이 로컬 시간 기준으로 작동하도록 함)
+            ev_start_local = event.start_time.astimezone()
+            ev_end_local = event.end_time.astimezone()
+
+            # 일정이 현재 시계가 보여주는 12시간 범위 내에 있는지 확인
+            # 시작/종료 시간 각도 계산 (로컬 시간 기준)
+            start_hour = ev_start_local.hour % 12 + ev_start_local.minute / 60.0
+            end_hour = ev_end_local.hour % 12 + ev_end_local.minute / 60.0
+            
+            # 아날로그 시계 각도 (12시가 90도, 시계 방향)
+            # QPainter.drawArc/drawPie는 1/16도 단위를 사용하며, 3시 방향이 0도, 반시계 방향임
+            
+            start_angle = (90 - (start_hour * 30)) * 16
+            
+            # duration_minutes가 12시간을 넘을 경우 제한
+            span_min = min(event.duration_minutes, 12 * 60)
+            span_angle = -(span_min / (12 * 60) * 360) * 16
+            
+            # 종료된 일정은 표시하지 않음 (사용자 요청 반영)
+            if now_dt > ev_end_local:
+                continue
+
+            # 진행 중인 일정에 대한 특수 효과
+            if ev_start_local <= now_dt <= ev_end_local:
+                if event.duration_minutes <= 60:
+                    # 1시간 이하: 시침/분침이 지나가면서 지우는 효과
+                    # (현재 시간부터 종료 시간까지의 남은 영역만 그립니다.)
+                    now_hour_val = now_dt.hour % 12 + now_dt.minute / 60.0 + now_dt.second / 3600.0
+                    start_angle = (90 - (now_hour_val * 30)) * 16
+                    remaining_hours = (ev_end_local - now_dt).total_seconds() / 3600.0
+                    span_angle = -(remaining_hours * 30) * 16
+                    color = QColor(event.color)
+                else:
+                    # 1시간 초과: 채도/투명도 감소 및 지우기 효과 병합
+                    total_duration = (ev_end_local - ev_start_local).total_seconds()
+                    elapsed = (now_dt - ev_start_local).total_seconds()
+                    progress = min(1.0, elapsed / total_duration)
+                    
+                    # 장기 일정은 영역을 유지하되 투명도를 낮춤
+                    color = QColor(event.color)
+                    alpha = int(event.color.alpha() * (1.0 - progress * 0.7))
+                    color.setAlpha(max(40, alpha))
+            else:
+                # 시작 전 일정 (미래): 은은하게 표시
+                color = QColor(event.color)
+                color.setAlpha(60)
+
+            # 렌더링 시작
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(color))
+            
+            # 1. 색상 채우기 (부채꼴)
+            rect = QRect(-88, -88, 176, 176)
+            painter.drawPie(rect, int(start_angle), int(span_angle))
+            
+            # 2. 외곽선 그리기
+            outline_color = QColor(color)
+            if ev_start_local <= now_dt <= ev_end_local:
+                outline_color.setAlpha(255)
+            else:
+                outline_color.setAlpha(min(255, color.alpha() + 40))
+                
+            pen = QPen(outline_color, 1.5, Qt.SolidLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawArc(rect, int(start_angle), int(span_angle))
