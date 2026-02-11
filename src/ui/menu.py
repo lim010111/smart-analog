@@ -1,5 +1,6 @@
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QMenu, QWidgetAction, QSlider, QVBoxLayout, QWidget, QLabel, QApplication
 from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt
 
 class ClockContextMenu(QMenu):
     def __init__(self, parent):
@@ -13,6 +14,7 @@ class ClockContextMenu(QMenu):
                 background-color: #2b2b2b;
                 color: white;
                 border: 1px solid #444;
+                padding: 10px;
             }
             QMenu::item:selected {
                 background-color: #444;
@@ -37,6 +39,48 @@ class ClockContextMenu(QMenu):
 
         self.addSeparator()
 
+        # --- 투명도 조절 슬라이더 추가 ---
+        transparency_label = QLabel("Event Opacity")
+        transparency_label.setStyleSheet("color: #aaa; font-size: 10px; margin-left: 5px;")
+        
+        slider = QSlider(Qt.Horizontal)
+        slider.setMinimum(0)
+        slider.setMaximum(255)
+        slider.setValue(self.clock.event_alpha)
+        slider.setFixedWidth(150)
+        slider.setStyleSheet("""
+            QSlider {
+                height: 30px;
+            }
+            QSlider::handle:horizontal {
+                background: #55ff55;
+                width: 12px;
+                border-radius: 6px;
+                margin: -4px 0;
+            }
+            QSlider::groove:horizontal {
+                background: #444;
+                height: 4px;
+                border-radius: 2px;
+            }
+        """)
+        slider.valueChanged.connect(self.update_opacity)
+
+        # 위젯들을 담을 컨테이너
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(10, 5, 10, 10)
+        layout.setSpacing(5)
+        layout.addWidget(transparency_label)
+        layout.addWidget(slider)
+
+        slider_action = QWidgetAction(self)
+        slider_action.setDefaultWidget(container)
+        self.addAction(slider_action)
+        # --------------------------------
+
+        self.addSeparator()
+
         # 구글 캘린더 연동 액션
         sync_action = QAction("Sync Google Calendar", self)
         sync_action.triggered.connect(self.clock.sync_calendar)
@@ -51,6 +95,9 @@ class ClockContextMenu(QMenu):
         
         # 종료 액션
         exit_action = QAction("Exit", self)
-        from PySide6.QtWidgets import QApplication
         exit_action.triggered.connect(QApplication.quit)
         self.addAction(exit_action)
+
+    def update_opacity(self, value):
+        self.clock.event_alpha = value
+        self.clock.update()

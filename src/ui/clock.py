@@ -11,6 +11,7 @@ class AnalogClock(QWidget):
         self.current_theme_name = "dark"
         self._always_on_top = True
         self.events = [] # 캘린더 이벤트 리스트
+        self.event_alpha = 150  # 일정 영역 기본 투명도 (0-255)
         
         # 기본 윈도우 플래그는 관리를 위해 Main에서 처리하도록 위젯 속성만 설정
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -135,28 +136,21 @@ class AnalogClock(QWidget):
 
             # 진행 중인 일정에 대한 특수 효과
             if ev_start_local <= now_dt <= ev_end_local:
-                if event.duration_minutes <= 60:
-                    # 1시간 이하: 시침/분침이 지나가면서 지우는 효과
-                    # (현재 시간부터 종료 시간까지의 남은 영역만 그립니다.)
-                    now_hour_val = now_dt.hour % 12 + now_dt.minute / 60.0 + now_dt.second / 3600.0
-                    start_angle = (90 - (now_hour_val * 30)) * 16
-                    remaining_hours = (ev_end_local - now_dt).total_seconds() / 3600.0
-                    span_angle = -(remaining_hours * 30) * 16
-                    color = QColor(event.color)
-                else:
-                    # 1시간 초과: 채도/투명도 감소 및 지우기 효과 병합
-                    total_duration = (ev_end_local - ev_start_local).total_seconds()
-                    elapsed = (now_dt - ev_start_local).total_seconds()
-                    progress = min(1.0, elapsed / total_duration)
-                    
-                    # 장기 일정은 영역을 유지하되 투명도를 낮춤
-                    color = QColor(event.color)
-                    alpha = int(event.color.alpha() * (1.0 - progress * 0.7))
-                    color.setAlpha(max(40, alpha))
+                # 시침 위치에 맞춰 실시간으로 영역 지우기 효과 적용 (모든 일정 공통)
+                now_hour_val = now_dt.hour % 12 + now_dt.minute / 60.0 + now_dt.second / 3600.0
+                start_angle = (90 - (now_hour_val * 30)) * 16
+                
+                remaining_seconds = (ev_end_local - now_dt).total_seconds()
+                # 남은 시간을 최대 12시간으로 제한 (시계 한 바퀴)
+                remaining_hours = min(12.0, remaining_seconds / 3600.0)
+                span_angle = -(remaining_hours * 30) * 16
+                
+                color = QColor(event.color)
+                color.setAlpha(self.event_alpha)
             else:
                 # 시작 전 일정 (미래): 은은하게 표시
                 color = QColor(event.color)
-                color.setAlpha(60)
+                color.setAlpha(int(self.event_alpha * 0.4)) # 기본 투명도의 40%
 
             # 렌더링 시작
             painter.setPen(Qt.NoPen)
@@ -169,8 +163,10 @@ class AnalogClock(QWidget):
             # 2. 외곽선 그리기
             outline_color = QColor(color)
             if ev_start_local <= now_dt <= ev_end_local:
-                outline_color.setAlpha(255)
+                # 진행 중인 일정: 채우기보다 약간 더 선명하게 (최대 255)
+                outline_color.setAlpha(min(255, self.event_alpha + 60))
             else:
+                # 미래 일정: 채우기 알파값에 비례하여 설정
                 outline_color.setAlpha(min(255, color.alpha() + 40))
                 
             pen = QPen(outline_color, 1.5, Qt.SolidLine)
