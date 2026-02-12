@@ -5,6 +5,80 @@ from PySide6.QtGui import QPainter, QColor, QPolygon, QBrush, QPen
 from PySide6.QtWidgets import QWidget
 from src.core.theme import THEMES
 
+class EventTooltip(QWidget):
+    """일정 제목을 표시하는 독립적인 오버레이 툴팁 윈도우입니다."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        # 마우스 이벤트를 통과시켜 시계 조작에 방해되지 않도록 설정
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        
+        self.event_item = None
+        self.text_width = 0
+        self.box_width = 0
+        self.box_height = 0
+        self.padding = 10
+        self.color_point_size = 10
+        self.gap = 8
+
+    def show_event(self, event, global_pos):
+        self.event_item = event
+        
+        # 폰트 설정 및 크기 측정
+        font = self.font()
+        font.setPointSize(10)
+        font.setBold(True)
+        self.setFont(font)
+        
+        metrics = self.fontMetrics()
+        self.text_width = metrics.horizontalAdvance(event.summary)
+        self.box_width = self.padding + self.color_point_size + self.gap + self.text_width + self.padding
+        self.box_height = metrics.height() + self.padding * 2
+        
+        # 윈도우 크기 조정 (그림자 여백 확보)
+        self.resize(self.box_width + 10, self.box_height + 10)
+        
+        # 화면 경계 체크 (간단히 구현)
+        x = global_pos.x() + 15
+        y = global_pos.y() + 15
+        
+        self.move(x, y)
+        self.show()
+        self.update()
+
+    def paintEvent(self, paint_event):
+        if not self.event_item:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        tooltip_rect = QRect(0, 0, self.box_width, self.box_height)
+        
+        # 그림자 효과
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 100))
+        painter.drawRoundedRect(tooltip_rect.translated(2, 2), 5, 5)
+        
+        # 배경
+        painter.setBrush(QColor(40, 40, 40, 240))
+        painter.setPen(QPen(QColor(255, 255, 255, 120), 1))
+        painter.drawRoundedRect(tooltip_rect, 5, 5)
+        
+        # 일정 색상 포인트
+        point_rect = QRect(self.padding, (self.box_height - self.color_point_size) / 2, 
+                           self.color_point_size, self.color_point_size)
+        painter.setBrush(QBrush(self.event_item.color))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(point_rect)
+        
+        # 텍스트
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(self.padding + self.color_point_size + self.gap, 0, 
+                         self.text_width, self.box_height, 
+                         Qt.AlignLeft | Qt.AlignVCenter, self.event_item.summary)
+
 class AnalogClock(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -19,6 +93,9 @@ class AnalogClock(QWidget):
         self.hovered_event = None
         self.mouse_pos = QPoint(0, 0)
         
+        # 오버레이 툴팁 윈도우 생성
+        self.tooltip_window = EventTooltip()
+        
         # 기본 윈도우 플래그는 관리를 위해 Main에서 처리하도록 위젯 속성만 설정
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setMouseTracking(True)
@@ -29,6 +106,11 @@ class AnalogClock(QWidget):
         self.timer.start(50)
         
         self.resize(300, 300)
+
+    def closeEvent(self, event):
+        """윈도우 종료 시 툴팁 윈도우도 함께 닫습니다."""
+        self.tooltip_window.close()
+        super().closeEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -115,9 +197,6 @@ class AnalogClock(QWidget):
         painter.restore() # 시계 판 변환 복구 (기본 좌표계로)
         # --- [끝] 시계 판 그리기 영역 ---
 
-        # 툴팁 그리기 (마우스가 일정 위에 있을 때)
-        self.draw_tooltip(painter, theme)
-
         # 닫기 버튼 그리기 (기본 좌표계에서 수행)
         self.draw_close_button(painter, theme)
 
@@ -157,6 +236,13 @@ class AnalogClock(QWidget):
         old_hovered_event = self.hovered_event
         self.hovered_event = self.check_event_hover(self.mouse_pos)
         
+        # 오버레이 툴팁 갱신
+        if self.hovered_event:
+            global_pos = self.mapToGlobal(self.mouse_pos)
+            self.tooltip_window.show_event(self.hovered_event, global_pos)
+        else:
+            self.tooltip_window.hide()
+            
         # 상태가 변했을 때만 다시 그리기 호출
         if was_hovering_close != self.is_hovering_close or old_hovered_event != self.hovered_event:
             self.update()
@@ -240,64 +326,6 @@ class AnalogClock(QWidget):
                     return event
         
         return None
-
-    def draw_tooltip(self, painter, theme):
-        """마우스 위치에 일정 제목 툴팁을 그립니다."""
-        if not self.hovered_event:
-            return
-
-        painter.save()
-        
-        text = self.hovered_event.summary
-        font = painter.font()
-        font.setPointSize(10)
-        font.setBold(True)
-        painter.setFont(font)
-        
-        # 텍스트 크기 계산
-        metrics = painter.fontMetrics()
-        text_rect = metrics.boundingRect(text)
-        padding = 8
-        
-        # 툴팁 상자 크기 및 위치 결정
-        box_width = text_rect.width() + padding * 2
-        box_height = text_rect.height() + padding * 2
-        
-        # 마우스 위치에서 약간 오프셋 (화면 밖으로 나가지 않도록 보정)
-        x = self.mouse_pos.x() + 15
-        y = self.mouse_pos.y() + 15
-        
-        if x + box_width > self.width():
-            x = self.mouse_pos.x() - box_width - 5
-        if y + box_height > self.height():
-            y = self.mouse_pos.y() - box_height - 5
-            
-        tooltip_rect = QRect(x, y, box_width, box_height)
-        
-        # 그림자 효과 (약간의 오프셋을 둔 어두운 영역)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 100))
-        painter.drawRoundedRect(tooltip_rect.translated(2, 2), 5, 5)
-        
-        # 배경 (반투명 어두운 색)
-        painter.setBrush(QColor(40, 40, 40, 220))
-        painter.setPen(QPen(QColor(255, 255, 255, 100), 1))
-        painter.drawRoundedRect(tooltip_rect, 5, 5)
-        
-        # 일정 색상 포인트 (작은 사각형)
-        color_point_size = 10
-        point_rect = QRect(x + padding, y + (box_height - color_point_size) / 2, color_point_size, color_point_size)
-        painter.setBrush(QBrush(self.hovered_event.color))
-        painter.setPen(Qt.NoPen)
-        painter.drawRect(point_rect)
-        
-        # 텍스트
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(x + padding + color_point_size + 5, y + padding, 
-                         text_rect.width(), text_rect.height(), 
-                         Qt.AlignLeft | Qt.AlignVCenter, text)
-        
-        painter.restore()
 
     def check_close_button(self, pos):
         """클릭 좌표가 닫기 버튼 영역인지 확인합니다."""
