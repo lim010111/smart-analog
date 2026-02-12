@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QTimer
 from src.ui.clock import AnalogClock
 from src.ui.menu import ClockContextMenu
 from src.services.calendar import CalendarService
+import src.core.startup as startup
 
 class MainClockWindow(AnalogClock):
     def __init__(self):
@@ -75,15 +76,26 @@ class MainClockWindow(AnalogClock):
         self.current_theme_name = theme_name
         self.update()
 
+    def is_startup_enabled(self):
+        """시작 프로그램 등록 상태를 반환합니다."""
+        return startup.is_startup_enabled()
+
+    def toggle_startup(self):
+        """시작 프로그램 등록 상태를 토글합니다."""
+        current = startup.is_startup_enabled()
+        startup.set_startup(not current)
+        self.update() # 필요한 경우 UI 갱신 (메뉴는 다시 열릴 때 갱신됨)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            # 닫기 버튼 클릭 여부 확인
+            if self.check_close_button(event.position().toPoint()):
+                QApplication.quit()
+                return
+
             if self.windowHandle():
                 self.windowHandle().startSystemMove()
             event.accept()
-
-    def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            QApplication.quit()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

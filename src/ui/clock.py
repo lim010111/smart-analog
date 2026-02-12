@@ -13,8 +13,13 @@ class AnalogClock(QWidget):
         self.events = [] # 캘린더 이벤트 리스트
         self.event_alpha = 150  # 일정 영역 기본 투명도 (0-255)
         
+        # 닫기 버튼 설정
+        self.close_btn_rect = QRect(260, 10, 30, 30)
+        self.is_hovering_close = False
+        
         # 기본 윈도우 플래그는 관리를 위해 Main에서 처리하도록 위젯 속성만 설정
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setMouseTracking(True)
         
         # 타이머 설정 (부드러운 업데이트를 위해 50ms 간격)
         self.timer = QTimer(self)
@@ -34,6 +39,9 @@ class AnalogClock(QWidget):
         time_now = QTime.currentTime()
         theme = THEMES[self.current_theme_name]
 
+        # --- [시작] 시계 판 그리기 영역 ---
+        painter.save() # 전체 시계 판 변환을 위해 상태 저장
+        
         # 중앙으로 이동 및 스케일 조정
         painter.translate(self.width() / 2, self.height() / 2)
         painter.scale(side / 200.0, side / 200.0)
@@ -101,6 +109,51 @@ class AnalogClock(QWidget):
             rect_size = 20
             painter.drawText(int(x - rect_size/2), int(y - rect_size/2), rect_size, rect_size, 
                              Qt.AlignCenter, str(i))
+            
+        painter.restore() # 시계 판 변환 복구 (기본 좌표계로)
+        # --- [끝] 시계 판 그리기 영역 ---
+
+        # 닫기 버튼 그리기 (기본 좌표계에서 수행)
+        self.draw_close_button(painter, theme)
+
+    def draw_close_button(self, painter, theme):
+        """우측 상단에 닫기(x) 버튼을 그립니다."""
+        painter.save()
+        
+        # 호버 상태에 따른 색상 정의
+        bg_alpha = 150 if self.is_hovering_close else 30
+        x_alpha = 255 if self.is_hovering_close else 150
+        
+        # 배경 원 (옵션)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 80, 80, bg_alpha))
+        painter.drawEllipse(self.close_btn_rect)
+        
+        # 'x' 그리기
+        pen = QPen(QColor(255, 255, 255, x_alpha), 2, Qt.SolidLine, Qt.RoundCap)
+        painter.setPen(pen)
+        
+        margin = 10
+        r = self.close_btn_rect
+        painter.drawLine(r.left() + margin, r.top() + margin, r.right() - margin, r.bottom() - margin)
+        painter.drawLine(r.right() - margin, r.top() + margin, r.left() + margin, r.bottom() - margin)
+        
+        painter.restore()
+
+    def mouseMoveEvent(self, event):
+        """마우스 이동 시 닫기 버튼 호버 여부를 체크합니다."""
+        was_hovering = self.is_hovering_close
+        self.is_hovering_close = self.close_btn_rect.contains(event.position().toPoint())
+        
+        # 상태가 변했을 때만 다시 그리기 호출
+        if was_hovering != self.is_hovering_close:
+            self.update()
+        
+        super().mouseMoveEvent(event)
+
+    def check_close_button(self, pos):
+        """클릭 좌표가 닫기 버튼 영역인지 확인합니다."""
+        return self.close_btn_rect.contains(pos)
 
     def draw_calendar_events(self, painter):
         """캘린더 일정을 시계 판 위에 시각화합니다."""

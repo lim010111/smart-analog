@@ -1,3 +1,4 @@
+import sys
 from PySide6.QtWidgets import QMenu, QWidgetAction, QSlider, QVBoxLayout, QWidget, QLabel, QApplication
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
@@ -36,6 +37,15 @@ class ClockContextMenu(QMenu):
         ontop_action.setChecked(self.clock._always_on_top)
         ontop_action.triggered.connect(self.clock.toggle_always_on_top)
         self.addAction(ontop_action)
+
+        # 시작 프로그램 등록 (Windows 전용)
+        if sys.platform == "win32":
+            startup_action = QAction("Run at Startup", self)
+            startup_action.setCheckable(True)
+            # MainClockWindow에서 시작 프로그램 상태 정보를 가져와야 함
+            startup_action.setChecked(self.clock.is_startup_enabled())
+            startup_action.triggered.connect(self.clock.toggle_startup)
+            self.addAction(startup_action)
 
         self.addSeparator()
 
