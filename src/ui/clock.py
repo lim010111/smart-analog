@@ -16,6 +16,8 @@ class AnalogClock(QWidget):
         # 닫기 버튼 설정
         self.close_btn_rect = QRect(260, 10, 30, 30)
         self.is_hovering_close = False
+        self.hovered_event = None
+        self.mouse_pos = QPoint(0, 0)
         
         # 기본 윈도우 플래그는 관리를 위해 Main에서 처리하도록 위젯 속성만 설정
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -113,6 +115,9 @@ class AnalogClock(QWidget):
         painter.restore() # 시계 판 변환 복구 (기본 좌표계로)
         # --- [끝] 시계 판 그리기 영역 ---
 
+        # 툴팁 그리기 (마우스가 일정 위에 있을 때)
+        self.draw_tooltip(painter, theme)
+
         # 닫기 버튼 그리기 (기본 좌표계에서 수행)
         self.draw_close_button(painter, theme)
 
@@ -141,15 +146,158 @@ class AnalogClock(QWidget):
         painter.restore()
 
     def mouseMoveEvent(self, event):
-        """마우스 이동 시 닫기 버튼 호버 여부를 체크합니다."""
-        was_hovering = self.is_hovering_close
-        self.is_hovering_close = self.close_btn_rect.contains(event.position().toPoint())
+        """마우스 이동 시 호버 여부를 체크합니다."""
+        self.mouse_pos = event.position().toPoint()
+        
+        # 1. 닫기 버튼 호버 체크
+        was_hovering_close = self.is_hovering_close
+        self.is_hovering_close = self.close_btn_rect.contains(self.mouse_pos)
+        
+        # 2. 일정 영역 호버 체크
+        old_hovered_event = self.hovered_event
+        self.hovered_event = self.check_event_hover(self.mouse_pos)
         
         # 상태가 변했을 때만 다시 그리기 호출
-        if was_hovering != self.is_hovering_close:
+        if was_hovering_close != self.is_hovering_close or old_hovered_event != self.hovered_event:
             self.update()
         
         super().mouseMoveEvent(event)
+
+    def check_event_hover(self, pos):
+        """마우스 위치가 일정 영역 위인지 확인하고 해당 이벤트를 반환합니다."""
+        if not self.events:
+            return None
+
+        # 시계 중심으로부터의 상대 좌표 계산
+        center = QPoint(self.width() / 2, self.height() / 2)
+        rel_x = pos.x() - center.x()
+        rel_y = pos.y() - center.y()
+        
+        # 반지름 계산 (피타고라스)
+        dist = math.sqrt(rel_x**2 + rel_y**2)
+        
+        # 스케일 보정 (paintEvent와 동일하게)
+        side = min(self.width(), self.height())
+        scale = side / 200.0
+        scaled_dist = dist / scale
+        
+        # 일정 영역 내에 있는지 확인 (눈금 안쪽, 중심 바깥쪽)
+        if not (15 <= scaled_dist <= 88):
+            return None
+
+        # 각도 계산 (라디안 -> 도)
+        # math.atan2는 3시 방향이 0도, 아래쪽이 +, 위쪽이 - (반시계 역방향 느낌)
+        # QPainter.drawPie는 3시가 0도, 반시계 방향이 +
+        # 우리가 쓰는 start_angle 계산: (90 - (hour * 30)) * 16
+        
+        angle_rad = math.atan2(-rel_y, rel_x) # y 부호 반전하여 상단을 +로
+        angle_deg = math.degrees(angle_rad)
+        if angle_deg < 0:
+            angle_deg += 360 # 0 ~ 360 범위로 보정 (3시=0, 12시=90, 9시=180, 6시=270)
+            
+        now_dt = datetime.datetime.now().astimezone()
+
+        for event in self.events:
+            ev_start_local = event.start_time.astimezone()
+            ev_end_local = event.end_time.astimezone()
+            
+            if now_dt > ev_end_local:
+                continue
+
+            # 일전 각도 범위 계산 (16배 하지 않은 도 단위)
+            start_hour = ev_start_local.hour % 12 + ev_start_local.minute / 60.0
+            
+            # 진행 중인 일정은 현재 시각부터 시작함
+            if ev_start_local <= now_dt <= ev_end_local:
+                now_hour_val = now_dt.hour % 12 + now_dt.minute / 60.0 + now_dt.second / 3600.0
+                start_angle = 90 - (now_hour_val * 30)
+            else:
+                start_angle = 90 - (start_hour * 30)
+                
+            span_min = min(event.duration_minutes, 12 * 60)
+            
+            if ev_start_local <= now_dt <= ev_end_local:
+                remaining_seconds = (ev_end_local - now_dt).total_seconds()
+                remaining_hours = min(12.0, remaining_seconds / 3600.0)
+                span_angle = -(remaining_hours * 30)
+            else:
+                span_angle = -(span_min / (12 * 60) * 360)
+
+            # 0~360 범위로 정규화
+            s_angle = start_angle % 360
+            e_angle = (start_angle + span_angle) % 360
+            
+            # 각도 포함 여부 체크 (시계 방향으로 그려지므로 span은 음수)
+            # 예: start=90(12시), span=-30 -> range [60, 90]
+            # e_angle이 s_angle보다 작은 경우 (일반적)
+            if e_angle < s_angle:
+                if e_angle <= angle_deg <= s_angle:
+                    return event
+            else:
+                # 0도를 통과하는 경우 (예: 2시~4시는 30도 ~ 330도)
+                # s_angle이 e_angle보다 작아진 경우 (30 < 330)
+                if angle_deg >= e_angle or angle_deg <= s_angle:
+                    return event
+        
+        return None
+
+    def draw_tooltip(self, painter, theme):
+        """마우스 위치에 일정 제목 툴팁을 그립니다."""
+        if not self.hovered_event:
+            return
+
+        painter.save()
+        
+        text = self.hovered_event.summary
+        font = painter.font()
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        
+        # 텍스트 크기 계산
+        metrics = painter.fontMetrics()
+        text_rect = metrics.boundingRect(text)
+        padding = 8
+        
+        # 툴팁 상자 크기 및 위치 결정
+        box_width = text_rect.width() + padding * 2
+        box_height = text_rect.height() + padding * 2
+        
+        # 마우스 위치에서 약간 오프셋 (화면 밖으로 나가지 않도록 보정)
+        x = self.mouse_pos.x() + 15
+        y = self.mouse_pos.y() + 15
+        
+        if x + box_width > self.width():
+            x = self.mouse_pos.x() - box_width - 5
+        if y + box_height > self.height():
+            y = self.mouse_pos.y() - box_height - 5
+            
+        tooltip_rect = QRect(x, y, box_width, box_height)
+        
+        # 그림자 효과 (약간의 오프셋을 둔 어두운 영역)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 100))
+        painter.drawRoundedRect(tooltip_rect.translated(2, 2), 5, 5)
+        
+        # 배경 (반투명 어두운 색)
+        painter.setBrush(QColor(40, 40, 40, 220))
+        painter.setPen(QPen(QColor(255, 255, 255, 100), 1))
+        painter.drawRoundedRect(tooltip_rect, 5, 5)
+        
+        # 일정 색상 포인트 (작은 사각형)
+        color_point_size = 10
+        point_rect = QRect(x + padding, y + (box_height - color_point_size) / 2, color_point_size, color_point_size)
+        painter.setBrush(QBrush(self.hovered_event.color))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(point_rect)
+        
+        # 텍스트
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(x + padding + color_point_size + 5, y + padding, 
+                         text_rect.width(), text_rect.height(), 
+                         Qt.AlignLeft | Qt.AlignVCenter, text)
+        
+        painter.restore()
 
     def check_close_button(self, pos):
         """클릭 좌표가 닫기 버튼 영역인지 확인합니다."""
