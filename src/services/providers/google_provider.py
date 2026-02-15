@@ -123,6 +123,35 @@ class GoogleCalendarProvider(CalendarProvider):
             end_data = item["end"]
 
             if "dateTime" not in start_data:
+                date_str = start_data.get("date")
+                if not date_str:
+                    continue
+                local_tz = datetime.datetime.now().astimezone().tzinfo
+                start_date = datetime.date.fromisoformat(date_str)
+                start_time = datetime.datetime.combine(
+                    start_date, datetime.time.min, tzinfo=local_tz
+                )
+                end_time = datetime.datetime.combine(
+                    start_date, datetime.time.max, tzinfo=local_tz
+                )
+
+                color_id = item.get("colorId")
+                event_color = None
+                if color_id in GOOGLE_COLORS:
+                    event_color = QColor(GOOGLE_COLORS[color_id])
+                    event_color.setAlpha(180)
+
+                event_args = {
+                    "id": item["id"],
+                    "summary": item.get("summary", "(제목 없음)"),
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "all_day": True,
+                }
+                if event_color:
+                    event_args["color"] = event_color
+
+                calendar_events.append(CalendarEvent(**event_args))
                 continue
 
             start_str = start_data["dateTime"]

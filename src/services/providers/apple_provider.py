@@ -130,11 +130,27 @@ class AppleCalendarProvider(CalendarProvider):
             return None
         dtstart = dtstart.dt
 
-        # 종일 일정 제외 (date 타입은 시간 정보가 없음)
+        # 종일 일정 처리 (date 타입은 시간 정보가 없음)
         if isinstance(dtstart, datetime.date) and not isinstance(
             dtstart, datetime.datetime
         ):
-            return None
+            local_tz = datetime.datetime.now().astimezone().tzinfo
+            start_time = datetime.datetime.combine(
+                dtstart, datetime.time.min, tzinfo=local_tz
+            )
+            end_time = datetime.datetime.combine(
+                dtstart, datetime.time.max, tzinfo=local_tz
+            )
+            summary = str(vevent.get("SUMMARY", "(제목 없음)"))
+            uid = str(vevent.get("UID", summary))
+            return CalendarEvent(
+                id=uid,
+                summary=summary,
+                start_time=start_time,
+                end_time=end_time,
+                color=cal_color,
+                all_day=True,
+            )
 
         if dtend is not None:
             dtend = dtend.dt

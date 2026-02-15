@@ -1,6 +1,6 @@
 import math
 import datetime
-from PySide6.QtCore import Qt, QTimer, QTime, QPoint, QRect
+from PySide6.QtCore import Qt, QTimer, QTime, QPoint, QPointF, QRect
 from PySide6.QtGui import QPainter, QColor, QPolygon, QBrush, QPen
 from PySide6.QtWidgets import QWidget
 from src.core.theme import THEMES
@@ -27,6 +27,8 @@ class EventTooltip(QWidget):
         self.gap = 8
 
     def _format_time_range(self, event) -> str:
+        if event.all_day:
+            return "종일"
         start = event.start_time.astimezone()
         end = event.end_time.astimezone()
         return f"{start.strftime('%H:%M')} - {end.strftime('%H:%M')}"
@@ -182,7 +184,7 @@ class AnalogClock(QWidget):
 
         # 중앙으로 이동 및 스케일 조정
         painter.translate(self.width() / 2, self.height() / 2)
-        painter.scale(side / 200.0, side / 200.0)
+        painter.scale((side - 12) / 200.0, (side - 12) / 200.0)
 
         # 시계 배경 원
         painter.setPen(QPen(theme["border"], 2))
@@ -331,11 +333,28 @@ class AnalogClock(QWidget):
 
         # 스케일 보정 (paintEvent와 동일하게)
         side = min(self.width(), self.height())
-        scale = side / 200.0
+        scale = (side - 12) / 200.0
         scaled_dist = dist / scale
 
         in_pie_region = 15 <= scaled_dist <= 88
         in_arc_region = 90 <= scaled_dist <= 97
+
+        if scaled_dist >= 95:
+            scaled_x = rel_x / scale
+            scaled_y = rel_y / scale
+            dot_radius = 3.5
+            dot_y = -103
+            spacing = 10
+            all_day_events = [e for e in self.events if e.all_day]
+            if all_day_events:
+                n = len(all_day_events)
+                total_width = (n - 1) * spacing
+                for i, event in enumerate(all_day_events):
+                    dot_x = -total_width / 2 + i * spacing
+                    dx = scaled_x - dot_x
+                    dy = scaled_y - dot_y
+                    if math.sqrt(dx * dx + dy * dy) <= dot_radius + 2:
+                        return event
 
         if not in_pie_region and not in_arc_region:
             return None
@@ -422,7 +441,23 @@ class AnalogClock(QWidget):
         now_dt = datetime.datetime.now().astimezone()
         current_is_am = now_dt.hour < 12
 
+        all_day_dot_index = 0
         for event in self.events:
+            if event.all_day:
+                dot_radius = 3.5
+                dot_y = -103
+                spacing = 10
+                all_day_count = sum(1 for e in self.events if e.all_day)
+                total_width = (all_day_count - 1) * spacing
+                dot_x = -total_width / 2 + all_day_dot_index * spacing
+                all_day_dot_index += 1
+
+                color = QColor(event.color)
+                color.setAlpha(self.event_alpha)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(color))
+                painter.drawEllipse(QPointF(dot_x, dot_y), dot_radius, dot_radius)
+                continue
             # Google API로부터 온 Aware Datetime을 사용자의 로컬 타임존으로 변환
             # (start_time.hour 등이 로컬 시간 기준으로 작동하도록 함)
             ev_start_local = event.start_time.astimezone()
