@@ -26,30 +26,51 @@ class EventTooltip(QWidget):
         self.color_point_size = 10
         self.gap = 8
 
+    def _format_time_range(self, event) -> str:
+        start = event.start_time.astimezone()
+        end = event.end_time.astimezone()
+        return f"{start.strftime('%H:%M')} - {end.strftime('%H:%M')}"
+
     def show_event(self, event, global_pos):
         self.event_item = event
+        self.time_range_text = self._format_time_range(event)
 
-        # 폰트 설정 및 크기 측정
-        font = self.font()
-        font.setPointSize(10)
-        font.setBold(True)
-        self.setFont(font)
+        title_font = self.font()
+        title_font.setPointSize(10)
+        title_font.setBold(True)
 
-        metrics = self.fontMetrics()
-        self.text_width = metrics.horizontalAdvance(event.summary)
-        self.box_width = (
+        sub_font = self.font()
+        sub_font.setPointSize(8)
+        sub_font.setBold(False)
+
+        from PySide6.QtGui import QFontMetrics
+
+        title_metrics = QFontMetrics(title_font)
+        sub_metrics = QFontMetrics(sub_font)
+
+        self.title_font = title_font
+        self.sub_font = sub_font
+
+        title_width = title_metrics.horizontalAdvance(event.summary)
+        sub_width = sub_metrics.horizontalAdvance(self.time_range_text)
+        self.text_width = max(title_width, sub_width)
+
+        self.title_height = title_metrics.height()
+        self.sub_height = sub_metrics.height()
+        line_spacing = 2
+
+        content_x = self.padding + self.color_point_size + self.gap
+        self.box_width = content_x + self.text_width + self.padding
+        self.box_height = (
             self.padding
-            + self.color_point_size
-            + self.gap
-            + self.text_width
+            + self.title_height
+            + line_spacing
+            + self.sub_height
             + self.padding
         )
-        self.box_height = metrics.height() + self.padding * 2
 
-        # 윈도우 크기 조정 (그림자 여백 확보)
         self.resize(self.box_width + 10, self.box_height + 10)
 
-        # 화면 경계 체크 (간단히 구현)
         x = global_pos.x() + 15
         y = global_pos.y() + 15
 
@@ -87,15 +108,28 @@ class EventTooltip(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawRect(point_rect)
 
-        # 텍스트
+        content_x = self.padding + self.color_point_size + self.gap
+
         painter.setPen(QColor(255, 255, 255))
+        painter.setFont(self.title_font)
         painter.drawText(
-            self.padding + self.color_point_size + self.gap,
-            0,
+            content_x,
+            self.padding,
             self.text_width,
-            self.box_height,
+            self.title_height,
             Qt.AlignLeft | Qt.AlignVCenter,
             self.event_item.summary,
+        )
+
+        painter.setPen(QColor(180, 180, 180))
+        painter.setFont(self.sub_font)
+        painter.drawText(
+            content_x,
+            self.padding + self.title_height + 2,
+            self.text_width,
+            self.sub_height,
+            Qt.AlignLeft | Qt.AlignVCenter,
+            self.time_range_text,
         )
 
 
@@ -300,8 +334,10 @@ class AnalogClock(QWidget):
         scale = side / 200.0
         scaled_dist = dist / scale
 
-        # 일정 영역 내에 있는지 확인 (눈금 안쪽, 중심 바깥쪽)
-        if not (15 <= scaled_dist <= 88):
+        in_pie_region = 15 <= scaled_dist <= 88
+        in_arc_region = 90 <= scaled_dist <= 97
+
+        if not in_pie_region and not in_arc_region:
             return None
 
         # 각도 계산 (라디안 -> 도)
@@ -315,6 +351,7 @@ class AnalogClock(QWidget):
             angle_deg += 360  # 0 ~ 360 범위로 보정 (3시=0, 12시=90, 9시=180, 6시=270)
 
         now_dt = datetime.datetime.now().astimezone()
+        current_is_am = now_dt.hour < 12
 
         for event in self.events:
             ev_start_local = event.start_time.astimezone()
@@ -323,11 +360,21 @@ class AnalogClock(QWidget):
             if now_dt > ev_end_local:
                 continue
 
+            is_in_progress = ev_start_local <= now_dt <= ev_end_local
+            is_current_cycle = is_in_progress or current_is_am == (
+                ev_start_local.hour < 12
+            )
+
+            if is_current_cycle and not in_pie_region:
+                continue
+            if not is_current_cycle and not in_arc_region:
+                continue
+
             # 일전 각도 범위 계산 (16배 하지 않은 도 단위)
             start_hour = ev_start_local.hour % 12 + ev_start_local.minute / 60.0
 
             # 진행 중인 일정은 현재 시각부터 시작함
-            if ev_start_local <= now_dt <= ev_end_local:
+            if is_in_progress:
                 now_hour_val = (
                     now_dt.hour % 12 + now_dt.minute / 60.0 + now_dt.second / 3600.0
                 )
@@ -337,7 +384,7 @@ class AnalogClock(QWidget):
 
             span_min = min(event.duration_minutes, 12 * 60)
 
-            if ev_start_local <= now_dt <= ev_end_local:
+            if is_in_progress:
                 remaining_seconds = (ev_end_local - now_dt).total_seconds()
                 remaining_hours = min(12.0, remaining_seconds / 3600.0)
                 span_angle = -(remaining_hours * 30)
@@ -373,6 +420,7 @@ class AnalogClock(QWidget):
 
         # 현재 로컬 시간 기준 (시계 바늘과 일치시키기 위함)
         now_dt = datetime.datetime.now().astimezone()
+        current_is_am = now_dt.hour < 12
 
         for event in self.events:
             # Google API로부터 온 Aware Datetime을 사용자의 로컬 타임존으로 변환
@@ -398,8 +446,14 @@ class AnalogClock(QWidget):
             if now_dt > ev_end_local:
                 continue
 
+            # AM/PM 사이클 분류 (check_event_hover와 동일한 로직)
+            is_in_progress = ev_start_local <= now_dt <= ev_end_local
+            is_current_cycle = is_in_progress or current_is_am == (
+                ev_start_local.hour < 12
+            )
+
             # 진행 중인 일정에 대한 특수 효과
-            if ev_start_local <= now_dt <= ev_end_local:
+            if is_in_progress:
                 # 시침 위치에 맞춰 실시간으로 영역 지우기 효과 적용 (모든 일정 공통)
                 now_hour_val = (
                     now_dt.hour % 12 + now_dt.minute / 60.0 + now_dt.second / 3600.0
@@ -418,24 +472,32 @@ class AnalogClock(QWidget):
                 color = QColor(event.color)
                 color.setAlpha(int(self.event_alpha * 0.4))  # 기본 투명도의 40%
 
-            # 렌더링 시작
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(color))
+            if is_current_cycle:
+                # 현재 사이클 일정: 부채꼴(pie) + 외곽선(arc) 렌더링
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(color))
 
-            # 1. 색상 채우기 (부채꼴)
-            rect = QRect(-88, -88, 176, 176)
-            painter.drawPie(rect, int(start_angle), int(span_angle))
+                rect = QRect(-88, -88, 176, 176)
+                painter.drawPie(rect, int(start_angle), int(span_angle))
 
-            # 2. 외곽선 그리기
-            outline_color = QColor(color)
-            if ev_start_local <= now_dt <= ev_end_local:
-                # 진행 중인 일정: 채우기보다 약간 더 선명하게 (최대 255)
-                outline_color.setAlpha(min(255, self.event_alpha + 60))
+                # 외곽선 그리기
+                outline_color = QColor(color)
+                if is_in_progress:
+                    outline_color.setAlpha(min(255, self.event_alpha + 60))
+                else:
+                    outline_color.setAlpha(min(255, color.alpha() + 40))
+
+                pen = QPen(outline_color, 1.5, Qt.SolidLine)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawArc(rect, int(start_angle), int(span_angle))
             else:
-                # 미래 일정: 채우기 알파값에 비례하여 설정
-                outline_color.setAlpha(min(255, color.alpha() + 40))
+                # 다음 사이클 일정: 바깥쪽 호(arc)만 렌더링
+                outer_rect = QRect(-94, -94, 188, 188)
+                arc_color = QColor(color)
+                arc_color.setAlpha(min(255, color.alpha() + 40))
 
-            pen = QPen(outline_color, 1.5, Qt.SolidLine)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawArc(rect, int(start_angle), int(span_angle))
+                pen = QPen(arc_color, 4, Qt.SolidLine, Qt.RoundCap)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawArc(outer_rect, int(start_angle), int(span_angle))
