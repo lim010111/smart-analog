@@ -12,6 +12,7 @@ from src.ui.menu import ClockContextMenu
 from src.ui.dialogs import AppleLoginDialog
 from src.services.calendar import CalendarService
 from src.services.providers.apple_provider import AppleCalendarProvider
+from caldav.lib.error import AuthorizationError
 import src.core.startup as startup
 
 
@@ -64,14 +65,36 @@ class MainClockWindow(AnalogClock):
             QMessageBox.information(
                 self, "Success", f"{name} Calendar synced successfully!"
             )
+        except AuthorizationError:
+            self._handle_apple_reauth()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Calendar sync failed: {e}")
+
+    def _handle_apple_reauth(self):
+        provider = self.calendar_service.active_provider
+        if not isinstance(provider, AppleCalendarProvider):
+            return
+
+        self.events = []
+        self.update()
+
+        QMessageBox.warning(
+            self,
+            "Session Expired",
+            "Apple Calendar session has expired.\nPlease sign in again.",
+        )
+
+        dialog = AppleLoginDialog(provider, self)
+        if dialog.exec() == AppleLoginDialog.Accepted:
+            self.refresh_calendar_events()
 
     def refresh_calendar_events(self):
         try:
             new_events = self.calendar_service.get_todays_events()
             self.events = new_events
             self.update()
+        except AuthorizationError:
+            self._handle_apple_reauth()
         except Exception as e:
             print(f"Failed to refresh events: {e}")
 

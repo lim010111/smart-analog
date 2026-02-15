@@ -82,7 +82,11 @@ class AppleCalendarProvider(CalendarProvider):
         principal = self.principal
         if not principal:
             return calendar_events
-        calendars = principal.calendars()
+        try:
+            calendars = principal.calendars()
+        except AuthorizationError:
+            self._clear_auth_state()
+            raise
 
         for cal in calendars:
             cal_color = self._extract_calendar_color(cal)
@@ -94,6 +98,9 @@ class AppleCalendarProvider(CalendarProvider):
                     event=True,
                     expand=True,
                 )
+            except AuthorizationError:
+                self._clear_auth_state()
+                raise
             except Exception:
                 continue
 
@@ -201,9 +208,12 @@ class AppleCalendarProvider(CalendarProvider):
             return [cleaned, collapsed]
         return [cleaned]
 
-    def logout(self) -> None:
+    def _clear_auth_state(self) -> None:
         self.client = None
         self.principal = None
+
+    def logout(self) -> None:
+        self._clear_auth_state()
         self._apple_id = None
         self._app_password = None
         if os.path.exists(self.credentials_path):
