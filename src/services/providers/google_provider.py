@@ -1,0 +1,193 @@
+import os
+import sys
+import datetime
+import pickle
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from dotenv import load_dotenv
+from PySide6.QtGui import QColor
+
+from src.models.event import CalendarEvent
+from src.services.providers.base import CalendarProvider
+
+
+def _get_resource_path(relative_path: str) -> str:
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
+env_path = _get_resource_path(".env")
+load_dotenv(env_path)
+
+SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+
+GOOGLE_COLORS = {
+    "1": "#a4bdfc",  # Lavender
+    "2": "#7ae148",  # Sage
+    "3": "#bdadff",  # Grape
+    "4": "#ff887c",  # Flamingo
+    "5": "#fbd75b",  # Banana
+    "6": "#ffb878",  # Tangerine
+    "7": "#46d6db",  # Peacock
+    "8": "#e1e1e1",  # Graphite
+    "9": "#5484ed",  # Blueberry
+    "10": "#51b749",  # Basil
+    "11": "#dc2127",  # Tomato
+}
+
+CLIENT_CONFIG = {
+    "installed": {
+        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        "project_id": os.getenv("GOOGLE_PROJECT_ID"),
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+        "redirect_uris": ["http://localhost"],
+    }
+}
+
+
+class GoogleCalendarProvider(CalendarProvider):
+    def __init__(self, token_path: str = "token.json"):
+        self.token_path = token_path
+        self.creds: Credentials | None = None
+        self.service = None
+
+    @property
+    def provider_name(self) -> str:
+        return "Google"
+
+    def authenticate(self) -> None:
+        if os.path.exists(self.token_path):
+            with open(self.token_path, "rb") as token:
+                self.creds = pickle.load(token)
+
+        if not self.creds or not self.creds.valid:
+            if self.creds and self.creds.expired and self.creds.refresh_token:
+                self.creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_config(CLIENT_CONFIG, SCOPES)
+                self.creds = flow.run_local_server(port=0)
+
+            with open(self.token_path, "wb") as token:
+                pickle.dump(self.creds, token)
+
+        self.service = build("calendar", "v3", credentials=self.creds)
+
+    def is_authenticated(self) -> bool:
+        return self.creds is not None and self.creds.valid and self.service is not None
+
+    def get_todays_events(self, max_results: int = 20) -> list[CalendarEvent]:
+        if not self.service:
+            self.authenticate()
+
+        now_local = datetime.datetime.now()
+        start_of_day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day = now_local.replace(hour=23, minute=59, second=59, microsecond=0)
+
+        time_min = (
+            start_of_day.astimezone(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        time_max = (
+            end_of_day.astimezone(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+        events_result = (
+            self.service.events()
+            .list(
+                calendarId="primary",
+                timeMin=time_min,
+                timeMax=time_max,
+                maxResults=max_results,
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+        )
+
+        items = events_result.get("items", [])
+        calendar_events = []
+
+        for item in items:
+            start_data = item["start"]
+            end_data = item["end"]
+
+            if "dateTime" not in start_data:
+                date_str = start_data.get("date")
+                if not date_str:
+                    continue
+                local_tz = datetime.datetime.now().astimezone().tzinfo
+                start_date = datetime.date.fromisoformat(date_str)
+                start_time = datetime.datetime.combine(
+                    start_date, datetime.time.min, tzinfo=local_tz
+                )
+                end_time = datetime.datetime.combine(
+                    start_date, datetime.time.max, tzinfo=local_tz
+                )
+
+                color_id = item.get("colorId")
+                event_color = None
+                if color_id in GOOGLE_COLORS:
+                    event_color = QColor(GOOGLE_COLORS[color_id])
+                    event_color.setAlpha(180)
+
+                event_args = {
+                    "id": item["id"],
+                    "summary": item.get("summary", "(제목 없음)"),
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "all_day": True,
+                }
+                if event_color:
+                    event_args["color"] = event_color
+
+                calendar_events.append(CalendarEvent(**event_args))
+                continue
+
+            start_str = start_data["dateTime"]
+            end_str = end_data["dateTime"]
+
+            start_time = datetime.datetime.fromisoformat(
+                start_str.replace("Z", "+00:00")
+            )
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=datetime.timezone.utc)
+
+            end_time = datetime.datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            if end_time.tzinfo is None:
+                end_time = end_time.replace(tzinfo=datetime.timezone.utc)
+
+            color_id = item.get("colorId")
+            event_color = None
+            if color_id in GOOGLE_COLORS:
+                event_color = QColor(GOOGLE_COLORS[color_id])
+                event_color.setAlpha(180)
+
+            event_args = {
+                "id": item["id"],
+                "summary": item.get("summary", "(제목 없음)"),
+                "start_time": start_time,
+                "end_time": end_time,
+            }
+            if event_color:
+                event_args["color"] = event_color
+
+            calendar_events.append(CalendarEvent(**event_args))
+
+        return calendar_events
+
+    def logout(self) -> None:
+        self.creds = None
+        self.service = None
+        if os.path.exists(self.token_path):
+            os.remove(self.token_path)

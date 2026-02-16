@@ -12,6 +12,7 @@ wheels/
 # Credential & Token
 credentials.json
 token.json
+apple_credentials.json
 .env
 
 # OS
@@ -24,3 +25,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# sessions/contexts with agent
+.sessions/

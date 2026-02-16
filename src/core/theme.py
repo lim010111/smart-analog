@@ -10,7 +10,7 @@ THEMES = {
         "ticks": QColor(255, 255, 255, 150)
     },
     "light": {
-        "face": QColor(240, 240, 240, 180),
+        "face": QColor(200, 200, 200, 180),
         "border": QColor(0, 0, 0, 40),
         "hands": QColor(40, 40, 40, 230),
         "nums": QColor(0, 0, 0, 150),
