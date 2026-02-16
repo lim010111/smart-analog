@@ -17,6 +17,7 @@
 - **테마 지원**: 다크 모드(Dark Mode)와 라이트 모드(Light Mode)를 지원합니다.
 - **항상 위(Always on Top)**: 다른 창보다 항상 위에 표시되도록 설정하여 언제든 시간을 확인할 수 있습니다.
 - **로그인/로그아웃**: 우클릭 메뉴에서 캘린더 프로바이더 전환 및 계정 로그아웃이 가능합니다.
+- **AI 일정 색상 분류 (선택 기능)**: OpenAI API를 사용해 일정 제목을 카테고리로 분류하고 색상을 자동 적용할 수 있습니다.
 
 ---
 
@@ -63,6 +64,22 @@ Apple Calendar은 iCloud CalDAV를 통해 연동됩니다. **앱 전용 비밀�
 2. 로그인 다이얼로그에 Apple ID(이메일)와 앱 전용 비밀번호를 입력합니다.
 3. 인증 성공 시 `apple_credentials.json`에 자격 증명이 저장되며 이후 자동 로그인됩니다.
 
+### AI 일정 색상 분류 (선택)
+
+OpenAI API 키를 설정하면 일정 제목을 카테고리로 분류하여 색상을 자동으로 적용합니다.
+
+1. `.env.template`을 `.env`로 복사합니다.
+2. 아래 값을 설정합니다.
+
+```bash
+ENABLE_AI_EVENT_COLOR=true
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_COLOR_MODEL=gpt-4o-mini
+```
+
+> [!TIP]
+> API 키가 없거나 호출이 실패하면 키워드 기반 로컬 분류로 자동 폴백됩니다.
+
 ---
 
 ## 프로젝트 구조
@@ -78,6 +95,8 @@ clock_widget/
 │   │   └── event.py                     # CalendarEvent 데이터 모델
 │   ├── services/
 │   │   ├── calendar.py                  # 프로바이더 매니저
+│   │   ├── ai/
+│   │   │   └── event_coloring.py        # OpenAI 기반 일정 색상 분류
 │   │   └── providers/
 │   │       ├── base.py                  # CalendarProvider ABC
 │   │       ├── google_provider.py       # Google Calendar 구현
