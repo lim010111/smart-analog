@@ -1,4 +1,5 @@
 from src.models.event import CalendarEvent
+from src.services.ai import AIEventColorService
 from src.services.providers.base import CalendarProvider
 from src.services.providers.google_provider import GoogleCalendarProvider
 from src.services.providers.apple_provider import AppleCalendarProvider
@@ -14,6 +15,7 @@ class CalendarService:
     def __init__(self):
         self._providers: dict[str, CalendarProvider] = {}
         self._active_provider_key: str | None = None
+        self._ai_event_color_service = AIEventColorService()
 
     @property
     def active_provider(self) -> CalendarProvider | None:
@@ -47,7 +49,9 @@ class CalendarService:
         provider = self.active_provider
         if not provider:
             return []
-        return provider.get_todays_events(max_results)
+
+        events = provider.get_todays_events(max_results)
+        return self._ai_event_color_service.apply(events)
 
     def logout(self) -> None:
         provider = self.active_provider
