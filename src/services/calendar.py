@@ -27,6 +27,10 @@ class CalendarService:
     def active_provider_key(self) -> str | None:
         return self._active_provider_key
 
+    @property
+    def ai_event_color_service(self) -> AIEventColorService:
+        return self._ai_event_color_service
+
     def get_provider(self, key: str) -> CalendarProvider | None:
         return self._providers.get(key)
 
