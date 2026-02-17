@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QTimer
 from src.ui.clock import AnalogClock
 from src.ui.menu import ClockContextMenu
-from src.ui.dialogs import AppleLoginDialog
+from src.ui.dialogs import AppleLoginDialog, CustomColorSchemaDialog
 from src.services.calendar import CalendarService
 from src.services.providers.apple_provider import AppleCalendarProvider
 from caldav.lib.error import AuthorizationError
@@ -150,6 +150,12 @@ class MainClockWindow(AnalogClock):
         QMessageBox.information(
             self, "Logged Out", f"{name} account has been logged out."
         )
+
+    def open_color_schema(self):
+        ai_service = self.calendar_service.ai_event_color_service
+        dialog = CustomColorSchemaDialog(ai_service, self)
+        if dialog.exec() == CustomColorSchemaDialog.Accepted:
+            self.refresh_calendar_events()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
