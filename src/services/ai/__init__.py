@@ -1,4 +1,30 @@
 from src.services.ai.color_schema import ColorRule, CustomColorSchema
+from src.services.ai.core import (
+    EventContext,
+    OpenAIConfig,
+    OpenAIJSONClient,
+    build_event_context,
+    event_context_to_dicts,
+    load_openai_config,
+    request_json_or_empty,
+    read_bool_env,
+    read_float_env,
+    read_int_env,
+)
 from src.services.ai.event_coloring import AIEventColorService
 
-__all__ = ["AIEventColorService", "ColorRule", "CustomColorSchema"]
+__all__ = [
+    "AIEventColorService",
+    "ColorRule",
+    "CustomColorSchema",
+    "EventContext",
+    "OpenAIConfig",
+    "OpenAIJSONClient",
+    "build_event_context",
+    "event_context_to_dicts",
+    "load_openai_config",
+    "request_json_or_empty",
+    "read_bool_env",
+    "read_float_env",
+    "read_int_env",
+]
