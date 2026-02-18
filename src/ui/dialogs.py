@@ -100,35 +100,26 @@ class AppleLoginDialog(QDialog):
 
 _DARK_DIALOG_STYLE = """
     QDialog { background-color: #2b2b2b; }
-    QLabel { color: #ccc; font-size: 12px; }
+    QLabel { color: #c7c7c7; font-size: 11px; }
     QLineEdit {
-        background-color: #3a3a3a; color: white; border: 1px solid #555;
-        border-radius: 4px; padding: 8px; font-size: 12px;
+        background-color: #353535; color: white; border: 1px solid #4a4a4a;
+        border-radius: 4px; padding: 5px 8px; font-size: 11px;
     }
     QLineEdit:focus { border-color: #0a84ff; }
     QPushButton {
         background-color: #0a84ff; color: white; border: none;
-        border-radius: 4px; padding: 8px 20px; font-size: 12px; font-weight: bold;
+        border-radius: 4px; padding: 6px 14px; font-size: 11px; font-weight: 600;
     }
     QPushButton:hover { background-color: #0070e0; }
     QPushButton:pressed { background-color: #005bb5; }
     QPushButton#cancelBtn { background-color: #555; color: #ccc; }
     QPushButton#cancelBtn:hover { background-color: #666; }
-    QPushButton#addBtn {
-        background-color: #3a3a3a; color: #0a84ff; border: 1px dashed #555;
-        padding: 6px; font-size: 18px;
-    }
-    QPushButton#addBtn:hover { background-color: #444; border-color: #0a84ff; }
-    QPushButton#removeBtn {
-        background-color: transparent; color: #f45b69; border: none;
-        font-size: 16px; font-weight: bold; padding: 4px 8px;
-    }
-    QPushButton#removeBtn:hover { color: #ff7a7a; }
     QPushButton#colorBtn {
-        border: 2px solid #555; border-radius: 4px;
-        min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px;
+        border: 1px solid #5b5b5b; border-radius: 2px;
+        min-width: 14px; max-width: 14px; min-height: 14px; max-height: 14px;
+        padding: 0;
     }
-    QPushButton#colorBtn:hover { border-color: #888; }
+    QPushButton#colorBtn:hover { border-color: #555; }
     QPushButton#generateBtn {
         background-color: #6f59d9; color: white;
     }
@@ -147,6 +138,20 @@ FALLBACK_ROW_COLORS = [
     "#5c7cfa",
 ]
 
+ROW_LABEL_EXAMPLES = [
+    "중요한 일",
+    "데이트",
+    "친구",
+    "게임",
+    "공부",
+    "독서",
+    "운동",
+    "업무",
+    "이동",
+    "가족",
+    "취미",
+]
+
 
 class CustomColorSchemaDialog(QDialog):
     def __init__(self, ai_service, allowed_colors: list[str], parent=None):
@@ -160,21 +165,19 @@ class CustomColorSchemaDialog(QDialog):
             self._allowed_colors = list(FALLBACK_ROW_COLORS)
 
         self.setWindowTitle("Color Schema")
-        self.setMinimumSize(480, 400)
+        self.setMinimumSize(420, 380)
         self.setStyleSheet(_DARK_DIALOG_STYLE)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(8)
+        layout.setContentsMargins(16, 14, 16, 14)
 
         title = QLabel("Custom Color Schema")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: white;")
+        title.setStyleSheet("font-size: 14px; font-weight: 600; color: white;")
         layout.addWidget(title)
 
-        hint = QLabel(
-            "Define color-category rules with calendar-supported colors only."
-        )
-        hint.setStyleSheet("font-size: 10px; color: #888;")
+        hint = QLabel("Set labels for each calendar-supported color.")
+        hint.setStyleSheet("font-size: 10px; color: #8f8f8f;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
@@ -182,19 +185,14 @@ class CustomColorSchemaDialog(QDialog):
         scroll.setWidgetResizable(True)
         self._rows_container = QWidget()
         self._rows_layout = QVBoxLayout(self._rows_container)
-        self._rows_layout.setSpacing(8)
+        self._rows_layout.setSpacing(5)
         self._rows_layout.setContentsMargins(0, 0, 0, 0)
         self._rows_layout.addStretch()
         scroll.setWidget(self._rows_container)
         layout.addWidget(scroll, 1)
 
-        add_btn = QPushButton("+")
-        add_btn.setObjectName("addBtn")
-        add_btn.clicked.connect(self._add_empty_row)
-        layout.addWidget(add_btn)
-
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(10)
+        btn_layout.setSpacing(8)
 
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("cancelBtn")
@@ -215,43 +213,36 @@ class CustomColorSchemaDialog(QDialog):
         self._load_existing_rules()
 
     def _load_existing_rules(self):
+        labels_by_color: dict[str, str] = {}
         schema = self.ai_service.custom_schema
-        if schema.is_empty:
-            self._add_empty_row()
-            return
-
         for rule in schema.rules:
-            self._add_row(rule.color_hex, rule.label)
+            labels_by_color[str(rule.color_hex).strip().lower()] = rule.label
 
-    def _next_color(self) -> str:
-        idx = len(self._rows) % len(self._allowed_colors)
-        return self._allowed_colors[idx]
+        for idx, color_hex in enumerate(self._allowed_colors):
+            placeholder = (
+                ROW_LABEL_EXAMPLES[idx] if idx < len(ROW_LABEL_EXAMPLES) else "..."
+            )
+            self._add_row(color_hex, labels_by_color.get(color_hex, ""), placeholder)
 
-    def _add_empty_row(self):
-        self._add_row(self._next_color(), "")
-
-    def _add_row(self, color_hex: str, label: str):
+    def _add_row(self, color_hex: str, label: str, placeholder: str):
         row_widget = QWidget()
+        row_widget.setFixedHeight(24)
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(8)
+        row_layout.setSpacing(7)
 
         color_btn = QPushButton()
         color_btn.setObjectName("colorBtn")
         color_btn.setStyleSheet(f"background-color: {color_hex};")
         color_btn.setProperty("color_hex", color_hex)
-        color_btn.clicked.connect(lambda: self._pick_color(color_btn))
+        color_btn.setEnabled(False)
         row_layout.addWidget(color_btn)
 
         label_input = QLineEdit()
-        label_input.setPlaceholderText("Category (e.g. 중요한 회의, 개발 작업)")
+        label_input.setPlaceholderText(placeholder)
         label_input.setText(label)
+        label_input.setFixedHeight(24)
         row_layout.addWidget(label_input, 1)
-
-        remove_btn = QPushButton("✕")
-        remove_btn.setObjectName("removeBtn")
-        remove_btn.clicked.connect(lambda: self._remove_row(row_widget))
-        row_layout.addWidget(remove_btn)
 
         row_data = {
             "widget": row_widget,
@@ -262,21 +253,6 @@ class CustomColorSchemaDialog(QDialog):
 
         insert_pos = self._rows_layout.count() - 1
         self._rows_layout.insertWidget(insert_pos, row_widget)
-
-    def _pick_color(self, btn: QPushButton):
-        current = str(btn.property("color_hex") or "").strip().lower()
-        try:
-            idx = self._allowed_colors.index(current)
-        except ValueError:
-            idx = -1
-        next_color = self._allowed_colors[(idx + 1) % len(self._allowed_colors)]
-        btn.setStyleSheet(f"background-color: {next_color};")
-        btn.setProperty("color_hex", next_color)
-
-    def _remove_row(self, row_widget: QWidget):
-        self._rows = [r for r in self._rows if r["widget"] is not row_widget]
-        self._rows_layout.removeWidget(row_widget)
-        row_widget.deleteLater()
 
     def _collect_rules(self):
         from src.services.ai.color_schema import ColorRule
