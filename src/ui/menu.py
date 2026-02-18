@@ -109,6 +109,16 @@ class ClockContextMenu(QMenu):
 
         self.addMenu(provider_menu)
 
+        color_schema_action = QAction("Color Schema", self)
+        color_schema_action.triggered.connect(self.clock.open_color_schema)
+        self.addAction(color_schema_action)
+
+        sync_all_color_action = QAction("Apply AI Colors to All Events", self)
+        sync_all_color_action.triggered.connect(
+            self.clock.apply_ai_colors_to_all_events
+        )
+        self.addAction(sync_all_color_action)
+
         sync_action = QAction("Sync Calendar", self)
         sync_action.triggered.connect(self.clock.sync_calendar)
         self.addAction(sync_action)

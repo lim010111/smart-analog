@@ -11,6 +11,7 @@ class CalendarEvent:
     end_time: datetime
     color: QColor = field(default_factory=lambda: QColor(100, 150, 255, 180))
     all_day: bool = False
+    provider_color_id: str | None = None
 
     @property
     def duration_minutes(self) -> int:

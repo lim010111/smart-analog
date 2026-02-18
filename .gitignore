@@ -13,6 +13,7 @@ wheels/
 credentials.json
 token.json
 apple_credentials.json
+color_schema.json
 .env
 
 # OS
