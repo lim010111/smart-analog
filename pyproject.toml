@@ -9,6 +9,7 @@ dependencies = [
     "google-api-python-client>=2.189.0",
     "google-auth-httplib2>=0.3.0",
     "google-auth-oauthlib>=1.2.4",
+    "openai>=1.0.0",
     "pyinstaller>=6.18.0",
     "pyside6>=6.10.2",
     "python-dotenv>=1.2.1",
