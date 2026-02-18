@@ -63,6 +63,16 @@ Apple Calendar은 iCloud CalDAV를 통해 연동됩니다. **앱 전용 비밀�
 2. 로그인 다이얼로그에 Apple ID(이메일)와 앱 전용 비밀번호를 입력합니다.
 3. 인증 성공 시 `apple_credentials.json`에 자격 증명이 저장되며 이후 자동 로그인됩니다.
 
+### OpenAI (AI 기능 브랜치 공통)
+
+`feature/ai-coloring`, `feature/ai-briefing`, `feature/ai-natural-input` 브랜치에서 공통으로 사용할 수 있도록 OpenAI 기본 환경 변수를 지원합니다.
+
+```bash
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_TIMEOUT=8
+```
+
 ---
 
 ## 프로젝트 구조
@@ -78,6 +88,8 @@ clock_widget/
 │   │   └── event.py                     # CalendarEvent 데이터 모델
 │   ├── services/
 │   │   ├── calendar.py                  # 프로바이더 매니저
+│   │   ├── ai/
+│   │   │   └── core/                    # OpenAI 공통 코어(설정/클라이언트/파서)
 │   │   └── providers/
 │   │       ├── base.py                  # CalendarProvider ABC
 │   │       ├── google_provider.py       # Google Calendar 구현
