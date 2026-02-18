@@ -56,3 +56,15 @@ class CalendarProvider(ABC):
 
     def write_event_colors(self, events: list[CalendarEvent]) -> int:
         return 0
+
+    def supports_event_create(self) -> bool:
+        return False
+
+    def create_event(
+        self,
+        summary: str,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        all_day: bool = False,
+    ) -> CalendarEvent | None:
+        return None

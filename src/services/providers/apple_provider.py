@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+import uuid
 import caldav
 from caldav.elements import ical as caldav_ical
 from caldav.lib.error import AuthorizationError
@@ -234,3 +235,168 @@ class AppleCalendarProvider(CalendarProvider):
         self._app_password = None
         if os.path.exists(self.credentials_path):
             os.remove(self.credentials_path)
+
+    def supports_event_create(self) -> bool:
+        return True
+
+    def create_event(
+        self,
+        summary: str,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        all_day: bool = False,
+    ) -> CalendarEvent | None:
+        title = str(summary).strip()
+        if not title:
+            return None
+
+        if not self.is_authenticated():
+            self.authenticate()
+
+        principal = self.principal
+        if not principal:
+            return None
+
+        try:
+            calendars = principal.calendars()
+        except AuthorizationError:
+            self._clear_auth_state()
+            raise
+        except Exception:
+            return None
+
+        if not calendars:
+            return None
+
+        target_calendar = calendars[0]
+        cal_color = self._extract_calendar_color(target_calendar)
+
+        start_value = self._ensure_tz(start_time)
+        end_value = self._ensure_tz(end_time)
+        if end_value <= start_value:
+            end_value = start_value + datetime.timedelta(hours=1)
+
+        if all_day:
+            start_date = start_value.date()
+            end_date = end_value.date()
+            if end_date <= start_date:
+                end_date = start_date + datetime.timedelta(days=1)
+            ical_data = self._build_all_day_ical(title, start_date, end_date)
+        else:
+            ical_data = self._build_timed_ical(title, start_value, end_value)
+
+        try:
+            saved_event = target_calendar.save_event(ical_data)
+        except AuthorizationError:
+            self._clear_auth_state()
+            raise
+        except Exception:
+            return None
+
+        try:
+            parsed = self._parse_vevent(saved_event, cal_color)
+            if parsed:
+                return parsed
+        except Exception:
+            pass
+
+        event_id = str(getattr(saved_event, "url", "") or "").strip()
+        if not event_id:
+            event_id = f"apple-{uuid.uuid4().hex}"
+
+        fallback_end = end_value
+        if all_day:
+            local_tz = datetime.datetime.now().astimezone().tzinfo
+            if local_tz is None:
+                local_tz = datetime.timezone.utc
+            fallback_start = datetime.datetime.combine(
+                start_value.date(), datetime.time.min, tzinfo=local_tz
+            )
+            fallback_end = datetime.datetime.combine(
+                start_value.date(), datetime.time.max, tzinfo=local_tz
+            )
+        else:
+            fallback_start = start_value
+
+        return CalendarEvent(
+            id=event_id,
+            summary=title,
+            start_time=fallback_start,
+            end_time=fallback_end,
+            color=cal_color,
+            all_day=all_day,
+        )
+
+    def _build_timed_ical(
+        self,
+        summary: str,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> str:
+        uid = f"{uuid.uuid4()}@clock-widget"
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        start_utc = start_time.astimezone(datetime.timezone.utc).strftime(
+            "%Y%m%dT%H%M%SZ"
+        )
+        end_utc = end_time.astimezone(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        escaped_summary = self._escape_ics_text(summary)
+
+        lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//Clock Widget//AI Natural Input//EN",
+            "CALSCALE:GREGORIAN",
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{stamp}",
+            f"DTSTART:{start_utc}",
+            f"DTEND:{end_utc}",
+            f"SUMMARY:{escaped_summary}",
+            "END:VEVENT",
+            "END:VCALENDAR",
+        ]
+        return "\r\n".join(lines) + "\r\n"
+
+    def _build_all_day_ical(
+        self,
+        summary: str,
+        start_date: datetime.date,
+        end_date: datetime.date,
+    ) -> str:
+        uid = f"{uuid.uuid4()}@clock-widget"
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        escaped_summary = self._escape_ics_text(summary)
+
+        lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//Clock Widget//AI Natural Input//EN",
+            "CALSCALE:GREGORIAN",
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{stamp}",
+            f"DTSTART;VALUE=DATE:{start_date.strftime('%Y%m%d')}",
+            f"DTEND;VALUE=DATE:{end_date.strftime('%Y%m%d')}",
+            f"SUMMARY:{escaped_summary}",
+            "END:VEVENT",
+            "END:VCALENDAR",
+        ]
+        return "\r\n".join(lines) + "\r\n"
+
+    @staticmethod
+    def _escape_ics_text(value: str) -> str:
+        text = str(value)
+        text = text.replace("\\", "\\\\")
+        text = text.replace("\n", "\\n")
+        text = text.replace(";", "\\;")
+        text = text.replace(",", "\\,")
+        return text
+
+    @staticmethod
+    def _ensure_tz(value: datetime.datetime) -> datetime.datetime:
+        if value.tzinfo is not None:
+            return value
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+        if local_tz is None:
+            local_tz = datetime.timezone.utc
+        return value.replace(tzinfo=local_tz)

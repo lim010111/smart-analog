@@ -194,6 +194,64 @@ class GoogleCalendarProvider(CalendarProvider):
 
         return updated_count
 
+    def supports_event_create(self) -> bool:
+        return True
+
+    def create_event(
+        self,
+        summary: str,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        all_day: bool = False,
+    ) -> CalendarEvent | None:
+        title = str(summary).strip()
+        if not title:
+            return None
+
+        if not self.service:
+            self.authenticate()
+        if not self.service:
+            return None
+        assert self.service is not None
+        service = self.service
+
+        start_value = self._ensure_tz(start_time)
+        end_value = self._ensure_tz(end_time)
+        if end_value <= start_value:
+            end_value = start_value + datetime.timedelta(minutes=60)
+
+        body: dict[str, object] = {"summary": title}
+        if all_day:
+            start_date = start_value.date()
+            end_date = end_value.date()
+            if end_date <= start_date:
+                end_date = start_date + datetime.timedelta(days=1)
+            body["start"] = {"date": start_date.isoformat()}
+            body["end"] = {"date": end_date.isoformat()}
+        else:
+            body["start"] = {"dateTime": start_value.isoformat()}
+            body["end"] = {"dateTime": end_value.isoformat()}
+
+        try:
+            created = service.events().insert(calendarId="primary", body=body).execute()
+        except Exception:
+            return None
+
+        parsed = self._item_to_calendar_event(created)
+        if parsed:
+            return parsed
+
+        event_id = str(created.get("id", "")).strip()
+        if not event_id:
+            return None
+        return CalendarEvent(
+            id=event_id,
+            summary=title,
+            start_time=start_value,
+            end_time=end_value,
+            all_day=all_day,
+        )
+
     def _color_id_from_hex(self, hex_color: str) -> str | None:
         target = str(hex_color or "").strip().lower()
         for color_id, color_hex in GOOGLE_COLORS.items():
@@ -202,11 +260,18 @@ class GoogleCalendarProvider(CalendarProvider):
         return None
 
     def _to_google_time(self, value: datetime.datetime) -> str:
-        if value.tzinfo is None:
-            value = value.astimezone()
+        value = self._ensure_tz(value)
         return (
             value.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         )
+
+    def _ensure_tz(self, value: datetime.datetime) -> datetime.datetime:
+        if value.tzinfo is not None:
+            return value
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+        if local_tz is None:
+            local_tz = datetime.timezone.utc
+        return value.replace(tzinfo=local_tz)
 
     def _item_to_calendar_event(self, item: dict) -> CalendarEvent | None:
         start_data = item.get("start", {})
