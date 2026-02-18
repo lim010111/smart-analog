@@ -1,3 +1,4 @@
+from src.services.ai.color_schema import ColorRule, CustomColorSchema
 from src.services.ai.core import (
     EventContext,
     OpenAIConfig,
@@ -10,13 +11,17 @@ from src.services.ai.core import (
     read_float_env,
     read_int_env,
 )
+from src.services.ai.event_coloring import AIEventColorService
 from src.services.ai.natural_input import AINaturalInputService, NaturalInputParseResult
 
 __all__ = [
+    "AIEventColorService",
     "EventContext",
     "OpenAIConfig",
     "OpenAIJSONClient",
     "AINaturalInputService",
+    "ColorRule",
+    "CustomColorSchema",
     "NaturalInputParseResult",
     "build_event_context",
     "event_context_to_dicts",
