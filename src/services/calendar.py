@@ -1,3 +1,6 @@
+import datetime
+import time
+
 from src.models.event import CalendarEvent
 from src.services.ai import AIEventColorService
 from src.services.providers.base import CalendarProvider
@@ -64,6 +67,58 @@ class CalendarService:
         updated_events = self._ai_event_color_service.apply(events)
         provider.write_event_colors(updated_events)
         return updated_events
+
+    def sync_ai_colors_for_range(
+        self,
+        start_time: datetime.datetime | None,
+        end_time: datetime.datetime | None,
+        max_results: int | None = None,
+        page_size: int = 250,
+        throttle_seconds: float = 0.05,
+    ) -> tuple[int, int]:
+        provider = self.active_provider
+        if not provider:
+            return (0, 0)
+
+        if not provider.supports_event_color_write():
+            return (0, 0)
+
+        self._sync_ai_palette_with_provider(provider)
+
+        events = provider.get_events_in_range(
+            start_time,
+            end_time,
+            max_results=max_results,
+            page_size=page_size,
+        )
+        if not events:
+            return (0, 0)
+
+        chunk_size = max(1, getattr(self._ai_event_color_service, "max_titles", 30))
+        updated_total = 0
+
+        for index in range(0, len(events), chunk_size):
+            chunk = events[index : index + chunk_size]
+            self._ai_event_color_service.apply(chunk)
+            updated_total += provider.write_event_colors(chunk)
+            if throttle_seconds > 0:
+                time.sleep(throttle_seconds)
+
+        return (len(events), updated_total)
+
+    def sync_ai_colors_for_all_events(
+        self,
+        max_results: int | None = None,
+        page_size: int = 250,
+        throttle_seconds: float = 0.05,
+    ) -> tuple[int, int]:
+        return self.sync_ai_colors_for_range(
+            start_time=None,
+            end_time=None,
+            max_results=max_results,
+            page_size=page_size,
+            throttle_seconds=throttle_seconds,
+        )
 
     def get_supported_ai_colors(self) -> list[str]:
         provider = self.active_provider
