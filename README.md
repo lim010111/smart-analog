@@ -18,6 +18,7 @@
 - **항상 위(Always on Top)**: 다른 창보다 항상 위에 표시되도록 설정하여 언제든 시간을 확인할 수 있습니다.
 - **로그인/로그아웃**: 우클릭 메뉴에서 캘린더 프로바이더 전환 및 계정 로그아웃이 가능합니다.
 - **AI 일정 색상 분류 (선택 기능)**: OpenAI API를 사용해 일정 제목을 카테고리로 분류하고 색상을 자동 적용할 수 있습니다.
+- **AI 오늘의 브리핑 (선택 기능)**: 앱 시작 시 오늘 일정 요약을 생성하고, 시계 위 마우스 오버 시 자연어 브리핑을 표시할 수 있습니다.
 
 ---
 
@@ -109,6 +110,46 @@ OPENAI_NATURAL_INPUT_TIMEOUT=8
 OPENAI_NATURAL_INPUT_MAX_CHARS=300
 ```
 
+### AI Today Briefing (feature/ai-briefing)
+
+앱 시작 시 오늘 일정을 자연어로 요약하고, 시계 위 마우스 오버 시 브리핑 툴팁으로 확인할 수 있습니다.
+
+```bash
+ENABLE_AI_TODAY_BRIEFING=false
+ENABLE_AI_TODAY_BRIEFING_TTS=false
+OPENAI_BRIEFING_MODEL=gpt-4o-mini
+OPENAI_BRIEFING_TIMEOUT=8
+OPENAI_BRIEFING_MAX_EVENTS=20
+```
+
+> [!NOTE]
+> TTS는 시스템/Qt 백엔드가 지원될 때만 동작합니다.
+> 미지원 환경에서는 브리핑 텍스트만 표시됩니다.
+
+#### Linux TTS 설정 (선택)
+
+Linux에서 `speechd` 백엔드가 없으면 다음과 같은 메시지가 보일 수 있습니다.
+
+```text
+Error loading text-to-speech plug-in "speechd"
+```
+
+Ubuntu/Debian 계열은 아래 패키지를 설치한 뒤 앱을 재실행하세요.
+
+```bash
+sudo apt update
+sudo apt install -y speech-dispatcher libspeechd2
+```
+
+설치 후 동작 확인:
+
+```bash
+spd-say "clock widget tts test"
+```
+
+> [!TIP]
+> `Today Briefing`은 켠 상태여도 TTS 백엔드가 초기화되지 않으면 자동으로 음성 기능이 비활성화되고 텍스트 브리핑만 유지됩니다.
+
 ---
 
 ## 프로젝트 구조
@@ -126,6 +167,7 @@ clock_widget/
 │   │   ├── calendar.py                  # 프로바이더 매니저
 │   │   ├── ai/
 │   │   │   └── core/                    # OpenAI 공통 코어(설정/클라이언트/파서)
+│   │   │   └── briefing.py              # OpenAI 기반 오늘의 브리핑 생성
 │   │   │   └── event_coloring.py        # OpenAI 기반 일정 색상 분류
 │   │   │   └── natural_input.py         # OpenAI 기반 자연어 입력 파싱
 │   │   └── providers/
@@ -151,6 +193,9 @@ clock_widget/
   - **Always on Top**: 시계를 항상 최상위에 표시할지 여부를 토글합니다.
   - **Event Opacity**: 일정 영역의 투명도를 조절합니다.
   - **Calendar Provider**: Google / Apple 캘린더를 선택합니다.
+  - **Today Briefing**: 오늘의 AI 브리핑 기능 on/off를 전환합니다.
+  - **Briefing TTS**: 브리핑 음성 읽기 on/off를 전환합니다.
+  - **Speak Today Briefing**: 현재 브리핑을 즉시 음성으로 읽습니다.
   - **Sync Calendar**: 캘린더와 수동으로 동기화합니다.
   - **Refresh Events**: 일정을 새로고침합니다.
   - **Logout**: 현재 캘린더 계정에서 로그아웃합니다.
