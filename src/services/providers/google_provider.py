@@ -3,7 +3,6 @@ import sys
 import datetime
 import pickle
 from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
@@ -14,17 +13,14 @@ from src.services.providers.base import CalendarProvider
 
 
 def _get_resource_path(relative_path: str) -> str:
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
+    base_path = getattr(sys, "_MEIPASS", os.path.abspath("."))
     return os.path.join(base_path, relative_path)
 
 
 env_path = _get_resource_path(".env")
 load_dotenv(env_path)
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 GOOGLE_COLORS = {
     "1": "#a4bdfc",  # Lavender
@@ -56,7 +52,7 @@ CLIENT_CONFIG = {
 class GoogleCalendarProvider(CalendarProvider):
     def __init__(self, token_path: str = "token.json"):
         self.token_path = token_path
-        self.creds: Credentials | None = None
+        self.creds = None
         self.service = None
 
     @property
@@ -67,6 +63,9 @@ class GoogleCalendarProvider(CalendarProvider):
         if os.path.exists(self.token_path):
             with open(self.token_path, "rb") as token:
                 self.creds = pickle.load(token)
+
+        if self.creds and not self.creds.has_scopes(SCOPES):
+            self.creds = None
 
         if not self.creds or not self.creds.valid:
             if self.creds and self.creds.expired and self.creds.refresh_token:
@@ -86,6 +85,10 @@ class GoogleCalendarProvider(CalendarProvider):
     def get_todays_events(self, max_results: int = 20) -> list[CalendarEvent]:
         if not self.service:
             self.authenticate()
+        if not self.service:
+            return []
+        assert self.service is not None
+        service = self.service
 
         now_local = datetime.datetime.now()
         start_of_day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -103,7 +106,7 @@ class GoogleCalendarProvider(CalendarProvider):
         )
 
         events_result = (
-            self.service.events()
+            service.events()
             .list(
                 calendarId="primary",
                 timeMin=time_min,
@@ -147,6 +150,7 @@ class GoogleCalendarProvider(CalendarProvider):
                     "start_time": start_time,
                     "end_time": end_time,
                     "all_day": True,
+                    "provider_color_id": color_id,
                 }
                 if event_color:
                     event_args["color"] = event_color
@@ -178,6 +182,7 @@ class GoogleCalendarProvider(CalendarProvider):
                 "summary": item.get("summary", "(제목 없음)"),
                 "start_time": start_time,
                 "end_time": end_time,
+                "provider_color_id": color_id,
             }
             if event_color:
                 event_args["color"] = event_color
@@ -191,3 +196,43 @@ class GoogleCalendarProvider(CalendarProvider):
         self.service = None
         if os.path.exists(self.token_path):
             os.remove(self.token_path)
+
+    def supports_event_color_write(self) -> bool:
+        return True
+
+    def get_supported_event_colors(self) -> dict[str, str]:
+        return dict(GOOGLE_COLORS)
+
+    def write_event_colors(self, events: list[CalendarEvent]) -> None:
+        if not events:
+            return
+        if not self.service:
+            self.authenticate()
+        if not self.service:
+            return
+        assert self.service is not None
+        service = self.service
+
+        for event in events:
+            color_id = self._color_id_from_hex(event.color.name())
+            if not color_id:
+                continue
+            if event.provider_color_id == color_id:
+                continue
+
+            try:
+                service.events().patch(
+                    calendarId="primary",
+                    eventId=event.id,
+                    body={"colorId": color_id},
+                ).execute()
+                event.provider_color_id = color_id
+            except Exception:
+                continue
+
+    def _color_id_from_hex(self, hex_color: str) -> str | None:
+        target = str(hex_color or "").strip().lower()
+        for color_id, color_hex in GOOGLE_COLORS.items():
+            if color_hex.lower() == target:
+                return color_id
+        return None

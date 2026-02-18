@@ -37,3 +37,12 @@ class CalendarProvider(ABC):
     def logout(self) -> None:
         """인증 상태를 초기화하고 저장된 자격 증명을 삭제합니다."""
         ...
+
+    def supports_event_color_write(self) -> bool:
+        return False
+
+    def get_supported_event_colors(self) -> dict[str, str]:
+        return {}
+
+    def write_event_colors(self, events: list[CalendarEvent]) -> None:
+        return
