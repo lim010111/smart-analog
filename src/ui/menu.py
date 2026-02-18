@@ -122,12 +122,15 @@ class ClockContextMenu(QMenu):
         briefing_tts_action = QAction("Briefing TTS", self)
         briefing_tts_action.setCheckable(True)
         briefing_tts_action.setChecked(self.clock.is_today_briefing_tts_enabled())
-        briefing_tts_action.setEnabled(self.clock.is_briefing_tts_available())
+        tts_reason = self.clock.briefing_tts_unavailable_reason().strip()
+        if tts_reason:
+            briefing_tts_action.setToolTip(tts_reason)
         briefing_tts_action.triggered.connect(self.clock.toggle_today_briefing_tts)
         self.addAction(briefing_tts_action)
 
         speak_briefing_action = QAction("Speak Today Briefing", self)
-        speak_briefing_action.setEnabled(self.clock.is_briefing_tts_available())
+        if tts_reason:
+            speak_briefing_action.setToolTip(tts_reason)
         speak_briefing_action.triggered.connect(self.clock.speak_today_briefing)
         self.addAction(speak_briefing_action)
 

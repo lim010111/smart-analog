@@ -183,6 +183,9 @@ class MainClockWindow(AnalogClock):
     def is_briefing_tts_available(self) -> bool:
         return self._briefing_tts.is_available()
 
+    def briefing_tts_unavailable_reason(self) -> str:
+        return self._briefing_tts.unavailable_reason()
+
     def is_today_briefing_tts_enabled(self) -> bool:
         return self.calendar_service.ai_today_briefing_service.is_tts_enabled()
 
@@ -190,6 +193,13 @@ class MainClockWindow(AnalogClock):
         service = self.calendar_service.ai_today_briefing_service
         next_state = not service.is_tts_enabled()
         service.set_tts_enabled(next_state)
+
+        if next_state and not self._briefing_tts.is_available():
+            reason = self._briefing_tts.unavailable_reason().strip()
+            message = "TTS backend is not ready yet. Briefing text will still work."
+            if reason:
+                message = f"{message}\n\nReason: {reason}"
+            QMessageBox.information(self, "TTS Unavailable", message)
 
     def speak_today_briefing(self) -> None:
         if not self._briefing_tts.is_available():
