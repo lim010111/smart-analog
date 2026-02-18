@@ -1,19 +1,40 @@
 import sys
 import os
+import datetime
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 from PySide6.QtWidgets import QApplication, QMessageBox
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from src.ui.clock import AnalogClock
 from src.ui.menu import ClockContextMenu
-from src.ui.dialogs import AppleLoginDialog
+from src.ui.dialogs import AppleLoginDialog, CustomColorSchemaDialog
 from src.services.calendar import CalendarService
 from src.services.providers.apple_provider import AppleCalendarProvider
 from caldav.lib.error import AuthorizationError
 import src.core.startup as startup
+
+
+class BulkColorSyncThread(QThread):
+    completed = Signal(int, int)
+    failed = Signal(str)
+
+    def __init__(self, calendar_service):
+        super().__init__()
+        self.calendar_service = calendar_service
+
+    def run(self):
+        try:
+            total, updated = self.calendar_service.sync_ai_colors_for_all_events(
+                max_results=None,
+                page_size=250,
+                throttle_seconds=0.05,
+            )
+            self.completed.emit(total, updated)
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 class MainClockWindow(AnalogClock):
@@ -34,6 +55,7 @@ class MainClockWindow(AnalogClock):
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_calendar_events)
         self.refresh_timer.start(300000)
+        self._bulk_sync_thread: BulkColorSyncThread | None = None
 
         try:
             if os.path.exists("token.json"):
@@ -150,6 +172,88 @@ class MainClockWindow(AnalogClock):
         QMessageBox.information(
             self, "Logged Out", f"{name} account has been logged out."
         )
+
+    def open_color_schema(self):
+        if not self.calendar_service.can_write_event_colors():
+            QMessageBox.warning(
+                self,
+                "Unsupported Provider",
+                "Current calendar provider does not support event color write.",
+            )
+            return
+
+        allowed_colors = self.calendar_service.get_supported_ai_colors()
+        if not allowed_colors:
+            QMessageBox.warning(
+                self,
+                "No Color Palette",
+                "No writable color palette available for current provider.",
+            )
+            return
+
+        ai_service = self.calendar_service.ai_event_color_service
+        dialog = CustomColorSchemaDialog(ai_service, allowed_colors, self)
+        if dialog.exec() == CustomColorSchemaDialog.Accepted:
+            self.refresh_calendar_events()
+
+    def apply_ai_colors_to_all_events(self):
+        if not self.calendar_service.can_write_event_colors():
+            QMessageBox.warning(
+                self,
+                "Unsupported Provider",
+                "Current calendar provider does not support event color write.",
+            )
+            return
+
+        confirmed = QMessageBox.question(
+            self,
+            "Apply AI Colors",
+            "Apply AI color rules to all events in this calendar?\n"
+            "This may take some time and perform many API updates.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirmed != QMessageBox.Yes:
+            return
+
+        if self._bulk_sync_thread and self._bulk_sync_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Sync In Progress",
+                "AI color sync is already running in background.",
+            )
+            return
+
+        self.refresh_timer.stop()
+        self.setCursor(Qt.WaitCursor)
+
+        self._bulk_sync_thread = BulkColorSyncThread(self.calendar_service)
+        self._bulk_sync_thread.completed.connect(self._on_bulk_sync_completed)
+        self._bulk_sync_thread.failed.connect(self._on_bulk_sync_failed)
+        self._bulk_sync_thread.finished.connect(self._on_bulk_sync_finished)
+        self._bulk_sync_thread.start()
+
+        QMessageBox.information(
+            self,
+            "AI Color Sync Started",
+            "Full event AI color sync is running in background.",
+        )
+
+    def _on_bulk_sync_completed(self, total: int, updated: int):
+        self.refresh_calendar_events()
+        QMessageBox.information(
+            self,
+            "AI Color Sync Complete",
+            f"Processed {total} events and updated {updated} event colors.",
+        )
+
+    def _on_bulk_sync_failed(self, message: str):
+        QMessageBox.critical(self, "AI Color Sync Failed", message)
+
+    def _on_bulk_sync_finished(self):
+        self.unsetCursor()
+        self.refresh_timer.start(300000)
+        self._bulk_sync_thread = None
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
