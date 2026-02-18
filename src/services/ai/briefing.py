@@ -1,0 +1,234 @@
+import datetime
+import json
+from pathlib import Path
+
+from src.models.event import CalendarEvent
+from src.services.ai.core import (
+    OpenAIJSONClient,
+    load_openai_config,
+    read_bool_env,
+    read_int_env,
+    request_json_or_empty,
+)
+
+
+class AITodayBriefingService:
+    def __init__(self):
+        self.default_enabled = read_bool_env("ENABLE_AI_TODAY_BRIEFING", default=False)
+        self.default_tts_enabled = read_bool_env(
+            "ENABLE_AI_TODAY_BRIEFING_TTS", default=False
+        )
+        self.max_events = max(1, read_int_env("OPENAI_BRIEFING_MAX_EVENTS", default=20))
+
+        config = load_openai_config(
+            model_env="OPENAI_BRIEFING_MODEL",
+            timeout_env="OPENAI_BRIEFING_TIMEOUT",
+            default_model="gpt-4o-mini",
+            default_timeout=8.0,
+        )
+        self._client = OpenAIJSONClient(config)
+
+        self._settings_path = (
+            Path.home() / ".clock_widget" / "ai_briefing_settings.json"
+        )
+        self._enabled = self.default_enabled
+        self._tts_enabled = self.default_tts_enabled
+        self._load_settings()
+
+        self._cached_date: datetime.date | None = None
+        self._cached_signature = ""
+        self._cached_text = ""
+
+    def is_enabled(self) -> bool:
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        self._enabled = bool(enabled)
+        self._save_settings()
+
+    def is_tts_enabled(self) -> bool:
+        return self._tts_enabled
+
+    def set_tts_enabled(self, enabled: bool) -> None:
+        self._tts_enabled = bool(enabled)
+        self._save_settings()
+
+    def generate_today_briefing(
+        self,
+        events: list[CalendarEvent],
+        now: datetime.datetime | None = None,
+        force: bool = False,
+    ) -> str:
+        local_now = now or datetime.datetime.now().astimezone()
+        today = local_now.date()
+        signature = self._build_signature(events)
+
+        if (
+            not force
+            and self._cached_text
+            and self._cached_date == today
+            and self._cached_signature == signature
+        ):
+            return self._cached_text
+
+        limited_events = self._normalize_events(events)
+
+        text = ""
+        if self._client.is_available():
+            text = self._generate_with_openai(limited_events, local_now)
+        if not text:
+            text = self._generate_fallback(limited_events, local_now)
+
+        self._cached_date = today
+        self._cached_signature = signature
+        self._cached_text = text
+        return text
+
+    def _generate_with_openai(
+        self,
+        events: list[dict[str, str | bool]],
+        now: datetime.datetime,
+    ) -> str:
+        payload = {
+            "today": now.date().isoformat(),
+            "now": now.isoformat(),
+            "timezone": str(now.tzinfo) if now.tzinfo else "local",
+            "events": events,
+            "schema": {
+                "briefing": (
+                    "Korean natural-language summary in 1-2 sentences. "
+                    "Mention notable schedule clusters and free time blocks."
+                )
+            },
+        }
+        response = request_json_or_empty(
+            self._client,
+            system_prompt=(
+                "You are a helpful daily scheduler assistant. "
+                "Generate a concise Korean briefing for today's calendar. "
+                "Return valid JSON only."
+            ),
+            user_payload=payload,
+            max_output_tokens=450,
+            model=self._client.config.model,
+        )
+        briefing = str(response.get("briefing", "")).strip()
+        return briefing
+
+    def _generate_fallback(
+        self,
+        events: list[dict[str, str | bool]],
+        now: datetime.datetime,
+    ) -> str:
+        if not events:
+            return (
+                "오늘 등록된 일정이 없습니다. 필요한 일정이 있으면 지금 추가해 두세요."
+            )
+
+        starts: list[datetime.datetime] = []
+        for event in events:
+            start_raw = str(event.get("start_time", "")).strip()
+            if not start_raw:
+                continue
+            try:
+                starts.append(datetime.datetime.fromisoformat(start_raw))
+            except ValueError:
+                continue
+
+        morning = sum(1 for dt in starts if dt.hour < 12)
+        afternoon = sum(1 for dt in starts if dt.hour >= 12)
+
+        gap_hours = self._largest_gap_hours(events, now)
+        if gap_hours >= 2.0:
+            gap_phrase = f"오후에 약 {gap_hours:.1f}시간의 공백이 있어요"
+        elif gap_hours >= 1.0:
+            gap_phrase = f"중간에 약 {gap_hours:.1f}시간의 짧은 공백이 있어요"
+        else:
+            gap_phrase = "일정이 비교적 촘촘하게 배치되어 있어요"
+
+        return (
+            f"오늘은 오전 일정 {morning}개, 오후 일정 {afternoon}개가 있어요. "
+            f"{gap_phrase}."
+        )
+
+    def _largest_gap_hours(
+        self,
+        events: list[dict[str, str | bool]],
+        now: datetime.datetime,
+    ) -> float:
+        timeline: list[tuple[datetime.datetime, datetime.datetime]] = []
+        for event in events:
+            start_raw = str(event.get("start_time", "")).strip()
+            end_raw = str(event.get("end_time", "")).strip()
+            if not start_raw or not end_raw:
+                continue
+            try:
+                start = datetime.datetime.fromisoformat(start_raw)
+                end = datetime.datetime.fromisoformat(end_raw)
+            except ValueError:
+                continue
+            if end <= start:
+                continue
+            timeline.append((start, end))
+
+        if not timeline:
+            return 0.0
+
+        timeline.sort(key=lambda pair: pair[0])
+        pointer = now
+        max_gap = datetime.timedelta(0)
+        for start, end in timeline:
+            if start > pointer:
+                max_gap = max(max_gap, start - pointer)
+            if end > pointer:
+                pointer = end
+
+        return round(max_gap.total_seconds() / 3600.0, 1)
+
+    def _build_signature(self, events: list[CalendarEvent]) -> str:
+        keys = [
+            f"{e.id}|{e.summary}|{e.start_time.isoformat()}|{e.end_time.isoformat()}"
+            for e in events
+        ]
+        keys.sort()
+        return "\n".join(keys)
+
+    def _normalize_events(
+        self,
+        events: list[CalendarEvent],
+    ) -> list[dict[str, str | bool]]:
+        normalized: list[dict[str, str | bool]] = []
+        for event in events[: self.max_events]:
+            normalized.append(
+                {
+                    "summary": event.summary,
+                    "start_time": event.start_time.isoformat(),
+                    "end_time": event.end_time.isoformat(),
+                    "all_day": event.all_day,
+                }
+            )
+        return normalized
+
+    def _load_settings(self) -> None:
+        try:
+            if not self._settings_path.exists():
+                return
+            with self._settings_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            self._enabled = bool(data.get("enabled", self.default_enabled))
+            self._tts_enabled = bool(data.get("tts_enabled", self.default_tts_enabled))
+        except Exception:
+            self._enabled = self.default_enabled
+            self._tts_enabled = self.default_tts_enabled
+
+    def _save_settings(self) -> None:
+        try:
+            self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "enabled": self._enabled,
+                "tts_enabled": self._tts_enabled,
+            }
+            with self._settings_path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception:
+            return

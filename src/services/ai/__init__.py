@@ -1,4 +1,5 @@
 from src.services.ai.color_schema import ColorRule, CustomColorSchema
+from src.services.ai.briefing import AITodayBriefingService
 from src.services.ai.core import (
     EventContext,
     OpenAIConfig,
@@ -13,9 +14,12 @@ from src.services.ai.core import (
 )
 from src.services.ai.event_coloring import AIEventColorService
 from src.services.ai.natural_input import AINaturalInputService, NaturalInputParseResult
+from src.services.ai.tts import BriefingTTSAdapter
 
 __all__ = [
     "AIEventColorService",
+    "AITodayBriefingService",
+    "BriefingTTSAdapter",
     "EventContext",
     "OpenAIConfig",
     "OpenAIJSONClient",
