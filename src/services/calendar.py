@@ -2,7 +2,7 @@ import datetime
 import time
 
 from src.models.event import CalendarEvent
-from src.services.ai import AIEventColorService
+from src.services.ai import AIEventColorService, AINaturalInputService
 from src.services.providers.base import CalendarProvider
 from src.services.providers.google_provider import GoogleCalendarProvider
 from src.services.providers.apple_provider import AppleCalendarProvider
@@ -19,6 +19,7 @@ class CalendarService:
         self._providers: dict[str, CalendarProvider] = {}
         self._active_provider_key: str | None = None
         self._ai_event_color_service = AIEventColorService()
+        self._ai_natural_input_service = AINaturalInputService()
 
     @property
     def active_provider(self) -> CalendarProvider | None:
@@ -33,6 +34,10 @@ class CalendarService:
     @property
     def ai_event_color_service(self) -> AIEventColorService:
         return self._ai_event_color_service
+
+    @property
+    def ai_natural_input_service(self) -> AINaturalInputService:
+        return self._ai_natural_input_service
 
     def get_provider(self, key: str) -> CalendarProvider | None:
         return self._providers.get(key)
