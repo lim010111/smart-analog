@@ -375,8 +375,16 @@ class NaturalInputPromptDialog(QDialog):
 
 
 class NaturalInputPreviewDialog(QDialog):
-    def __init__(self, source_text: str, result, parent=None):
+    def __init__(
+        self,
+        source_text: str,
+        result,
+        can_create: bool,
+        create_block_reason: str = "",
+        parent=None,
+    ):
         super().__init__(parent)
+        self._create_requested = False
         self.setWindowTitle("AI Natural Input Preview")
         self.setMinimumSize(500, 420)
         self.setStyleSheet(_DARK_DIALOG_STYLE)
@@ -425,9 +433,34 @@ class NaturalInputPreviewDialog(QDialog):
         raw_view.setPlainText(json.dumps(result.raw, ensure_ascii=False, indent=2))
         layout.addWidget(raw_view, 1)
 
+        if create_block_reason:
+            reason = QLabel(f"Create blocked: {create_block_reason}")
+            reason.setStyleSheet("font-size: 10px; color: #f0bd60;")
+            reason.setWordWrap(True)
+            layout.addWidget(reason)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
         close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
+        close_btn.setObjectName("cancelBtn")
+        close_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(close_btn)
+
+        create_btn = QPushButton("Create Event")
+        create_btn.setEnabled(can_create)
+        create_btn.clicked.connect(self._accept_create)
+        btn_layout.addWidget(create_btn)
+
+        layout.addLayout(btn_layout)
+
+    @property
+    def create_requested(self) -> bool:
+        return self._create_requested
+
+    def _accept_create(self) -> None:
+        self._create_requested = True
+        self.accept()
 
     @staticmethod
     def _format_dt(value) -> str:

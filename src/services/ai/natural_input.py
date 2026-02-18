@@ -13,6 +13,37 @@ from src.services.ai.core import (
 )
 
 SUPPORTED_INTENTS = {"create", "unknown"}
+GENERIC_TITLE_TOKENS = {
+    "데이트",
+    "약속",
+    "모임",
+    "미팅",
+    "회의",
+    "식사",
+    "점심",
+    "저녁",
+    "운동",
+    "스터디",
+    "공부",
+    "업무",
+    "일정",
+    "약속잡기",
+}
+COMPANION_STOPWORDS = {
+    "오늘",
+    "내일",
+    "모레",
+    "글피",
+    "이번주",
+    "다음주",
+    "다다음주",
+    "오전",
+    "오후",
+    "저녁",
+    "아침",
+    "점심",
+    "새벽",
+}
 KOREAN_WEEKDAY_BY_TOKEN = {
     "월요일": 0,
     "화요일": 1,
@@ -95,7 +126,10 @@ class AINaturalInputService:
             "now": datetime.datetime.now().astimezone().isoformat(),
             "schema": {
                 "intent": "create|unknown",
-                "title": "event title",
+                "title": (
+                    "specific event title preserving key person/context when present "
+                    "(e.g., '민지랑 데이트', not only '데이트')"
+                ),
                 "start_time": "ISO-8601 datetime or null",
                 "end_time": "ISO-8601 datetime or null",
                 "all_day": "boolean",
@@ -107,7 +141,9 @@ class AINaturalInputService:
             self._client,
             system_prompt=(
                 "Extract calendar intent from user text. "
-                "Return valid JSON only and follow the provided schema exactly."
+                "Return valid JSON only and follow the provided schema exactly. "
+                "Make title concise but specific. If a person/companion is mentioned, "
+                "include it in the title when useful (e.g., '민지랑 데이트')."
             ),
             user_payload=payload,
             max_output_tokens=700,
@@ -132,6 +168,10 @@ class AINaturalInputService:
             note_parts.append(f"Unsupported intent '{raw_intent}' -> unknown")
 
         title = str(data.get("title", "")).strip()
+        title, title_note = self._enrich_title(source_text, title)
+        if title_note:
+            note_parts.append(title_note)
+
         start_time = self._to_optional_datetime(data.get("start_time"))
         end_time = self._to_optional_datetime(data.get("end_time"))
         all_day = bool(data.get("all_day", False))
@@ -188,6 +228,58 @@ class AINaturalInputService:
             raw=data,
             note="; ".join(note_parts) if note_parts else None,
         )
+
+    def _enrich_title(self, source_text: str, title: str) -> tuple[str, str | None]:
+        normalized_title = str(title).strip()
+        if not normalized_title:
+            return (normalized_title, None)
+        if not self._is_generic_title(normalized_title):
+            return (normalized_title, None)
+
+        companion_phrase = self._extract_companion_phrase(source_text)
+        if not companion_phrase:
+            return (normalized_title, None)
+        if companion_phrase in normalized_title:
+            return (normalized_title, None)
+
+        enriched_title = f"{companion_phrase} {normalized_title}".strip()
+        note = f"Title enriched with companion context: {companion_phrase}"
+        return (enriched_title, note)
+
+    @staticmethod
+    def _is_generic_title(title: str) -> bool:
+        normalized = re.sub(r"\s+", "", str(title)).lower()
+        return normalized in GENERIC_TITLE_TOKENS
+
+    @staticmethod
+    def _extract_companion_phrase(source_text: str) -> str | None:
+        patterns = [
+            r"([가-힣A-Za-z]{2,20})\s*(랑|와|과)",
+            r"([가-힣A-Za-z]{2,20})\s*와\s*함께",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, source_text)
+            if not match:
+                continue
+
+            name = str(match.group(1)).strip()
+            if not name or name in COMPANION_STOPWORDS:
+                continue
+
+            if "함께" in pattern:
+                return f"{name}와"
+
+            particle = (
+                str(match.group(2)).strip()
+                if match.lastindex and match.lastindex >= 2
+                else "랑"
+            )
+            if not particle:
+                particle = "랑"
+            return f"{name}{particle}"
+
+        return None
 
     @staticmethod
     def _extract_weekday_index(text: str) -> int | None:

@@ -239,8 +239,63 @@ class MainClockWindow(AnalogClock):
             )
             return
 
-        preview_dialog = NaturalInputPreviewDialog(source_text, result, self)
-        preview_dialog.exec()
+        provider = self.calendar_service.active_provider
+        create_block_reason = ""
+        can_create = True
+        if provider is None:
+            can_create = False
+            create_block_reason = "No active calendar provider."
+        elif not self.calendar_service.can_create_events():
+            can_create = False
+            create_block_reason = (
+                f"{provider.provider_name} provider does not support event creation."
+            )
+        elif result.intent != "create":
+            can_create = False
+            create_block_reason = "Intent is not create."
+        elif result.start_time is None or result.end_time is None:
+            can_create = False
+            create_block_reason = "Missing start/end time in parsed result."
+        elif not result.title.strip():
+            can_create = False
+            create_block_reason = "Missing event title in parsed result."
+
+        preview_dialog = NaturalInputPreviewDialog(
+            source_text,
+            result,
+            can_create=can_create,
+            create_block_reason=create_block_reason,
+            parent=self,
+        )
+        if preview_dialog.exec() != NaturalInputPreviewDialog.Accepted:
+            return
+        if not preview_dialog.create_requested:
+            return
+
+        try:
+            created = self.calendar_service.create_event_from_natural_input(result)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Create Failed",
+                f"Failed to create event: {e}",
+            )
+            return
+
+        if not created:
+            QMessageBox.warning(
+                self,
+                "Create Failed",
+                "Could not create event from parsed result.",
+            )
+            return
+
+        self.refresh_calendar_events()
+        QMessageBox.information(
+            self,
+            "Event Created",
+            f"Created event: {created.summary}",
+        )
 
     def apply_ai_colors_to_all_events(self):
         if not self.calendar_service.can_write_event_colors():
