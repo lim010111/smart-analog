@@ -36,6 +36,8 @@ GOOGLE_COLORS = {
     "11": "#dc2127",  # Tomato
 }
 
+GOOGLE_COLOR_ORDER = ["11", "4", "6", "5", "2", "10", "7", "9", "1", "3", "8"]
+
 CLIENT_CONFIG = {
     "installed": {
         "client_id": os.getenv("GOOGLE_CLIENT_ID"),
@@ -201,7 +203,11 @@ class GoogleCalendarProvider(CalendarProvider):
         return True
 
     def get_supported_event_colors(self) -> dict[str, str]:
-        return dict(GOOGLE_COLORS)
+        return {
+            color_id: GOOGLE_COLORS[color_id]
+            for color_id in GOOGLE_COLOR_ORDER
+            if color_id in GOOGLE_COLORS
+        }
 
     def write_event_colors(self, events: list[CalendarEvent]) -> None:
         if not events:
