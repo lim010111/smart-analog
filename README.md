@@ -66,7 +66,7 @@ Apple Calendar은 iCloud CalDAV를 통해 연동됩니다. **앱 전용 비밀�
 
 ### AI 일정 색상 분류 (선택)
 
-OpenAI API 키를 설정하면 일정 제목을 카테고리로 분류하여 색상을 자동으로 적용합니다.
+OpenAI API 키와 사용자 정의 색상 스키마를 설정하면 일정 제목을 카테고리로 분류하여 색상을 자동으로 적용합니다.
 
 1. `.env.template`을 `.env`로 복사합니다.
 2. 아래 값을 설정합니다.
@@ -77,7 +77,11 @@ OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_COLOR_MODEL=gpt-4o-mini
 ```
 
-> [!TIP]
+3. 우클릭 메뉴 > **Color Schema** 에서 색상-카테고리 규칙을 정의합니다.
+4. **Generate Keywords** 버튼으로 AI가 각 카테고리에 맞는 키워드를 자동 생성합니다.
+
+> [!NOTE]
+> 색상 스키마가 설정되지 않으면 색상 분류가 적용되지 않습니다.
 > API 키가 없거나 호출이 실패하면 키워드 기반 로컬 분류로 자동 폴백됩니다.
 
 ---

@@ -17,58 +17,6 @@ def _to_bool(value: str | None, default: bool = False) -> bool:
 
 
 class AIEventColorService:
-    DEFAULT_CATEGORY_COLORS: dict[str, str] = {
-        "meeting": "#4f83ff",
-        "deep_work": "#6f59d9",
-        "personal": "#3cb371",
-        "health": "#f45b69",
-        "finance": "#f2a93b",
-        "travel": "#38b7a6",
-        "study": "#5c7cfa",
-        "social": "#ff7a59",
-        "other": "#8a8f98",
-    }
-
-    DEFAULT_KEYWORD_RULES: dict[str, tuple[str, ...]] = {
-        "meeting": (
-            "meeting",
-            "sync",
-            "standup",
-            "1:1",
-            "회의",
-            "미팅",
-            "콜",
-            "인터뷰",
-        ),
-        "deep_work": (
-            "focus",
-            "coding",
-            "review",
-            "개발",
-            "코딩",
-            "리뷰",
-            "집중",
-            "작업",
-        ),
-        "personal": ("family", "home", "개인", "가족", "집", "약속"),
-        "health": ("hospital", "clinic", "doctor", "운동", "헬스", "병원", "검진"),
-        "finance": ("payment", "invoice", "tax", "bank", "결제", "세금", "은행"),
-        "travel": ("flight", "train", "trip", "travel", "출장", "여행", "비행"),
-        "study": ("study", "class", "course", "lecture", "공부", "강의", "수업"),
-        "social": (
-            "lunch",
-            "dinner",
-            "coffee",
-            "party",
-            "점심",
-            "저녁",
-            "식사",
-            "모임",
-        ),
-    }
-
-    ALLOWED_CATEGORIES = set(DEFAULT_CATEGORY_COLORS.keys())
-
     def __init__(self):
         load_dotenv()
         self.enabled = _to_bool(os.getenv("ENABLE_AI_EVENT_COLOR"), default=False)
@@ -82,27 +30,11 @@ class AIEventColorService:
     def custom_schema(self) -> CustomColorSchema:
         return self._custom_schema
 
-    @property
-    def _effective_category_colors(self) -> dict[str, str]:
-        colors = dict(self.DEFAULT_CATEGORY_COLORS)
-        colors.update(self._custom_schema.to_category_colors())
-        return colors
-
-    @property
-    def _effective_keyword_rules(self) -> dict[str, tuple[str, ...]]:
-        rules = dict(self.DEFAULT_KEYWORD_RULES)
-        rules.update(self._custom_schema.to_keyword_rules())
-        return rules
-
-    @property
-    def _allowed_categories(self) -> set[str]:
-        return set(self._effective_category_colors.keys())
-
     def reload_schema(self) -> None:
         self._custom_schema.load()
 
     def apply(self, events: list[CalendarEvent]) -> list[CalendarEvent]:
-        if not events or not self.enabled:
+        if not events or not self.enabled or self._custom_schema.is_empty:
             return events
 
         titles = self._collect_titles(events)
@@ -155,9 +87,12 @@ class AIEventColorService:
 
         prompt = {
             "titles": titles,
-            "allowed_categories": sorted(self._allowed_categories),
+            "allowed_categories": sorted(
+                self._custom_schema.to_category_colors().keys()
+            ),
             "instructions": (
                 "Classify each title into one category. "
+                "If no category fits, use 'unmatched'. "
                 "Return strict JSON with this shape: "
                 "{'items':[{'title':'...','category':'...'}]}"
             ),
@@ -173,7 +108,7 @@ class AIEventColorService:
                         "content": (
                             "You classify calendar event titles. "
                             "Use only allowed_categories. "
-                            "If uncertain, use 'other'. "
+                            "If uncertain, use 'unmatched'. "
                             "Respond with valid JSON only."
                         ),
                     },
@@ -232,43 +167,39 @@ class AIEventColorService:
         return {}
 
     def _classify_with_keywords(self, titles: list[str]) -> dict[str, str]:
-        custom_rules = self._custom_schema.to_keyword_rules()
+        schema_rules = self._custom_schema.to_keyword_rules()
 
         categories: dict[str, str] = {}
         for title in titles:
             lowered = title.lower()
-            categories[lowered] = "other"
+            categories[lowered] = "unmatched"
 
-            for category, keywords in custom_rules.items():
+            for category, keywords in schema_rules.items():
                 if any(keyword in lowered for keyword in keywords):
                     categories[lowered] = category
                     break
-            else:
-                for category, keywords in self.DEFAULT_KEYWORD_RULES.items():
-                    if any(keyword in lowered for keyword in keywords):
-                        categories[lowered] = category
-                        break
 
         return categories
 
     def _normalize_category(self, value: object) -> str:
         category = str(value or "").strip().lower()
-        if category in self._allowed_categories:
+        allowed = set(self._custom_schema.to_category_colors().keys())
+        if category in allowed:
             return category
-        return "other"
+        return "unmatched"
 
     def _apply_categories(
         self,
         events: list[CalendarEvent],
         categories_by_title: dict[str, str],
     ) -> None:
-        effective_colors = self._effective_category_colors
+        schema_colors = self._custom_schema.to_category_colors()
         for event in events:
             title = str(event.summary).strip().lower()
-            category = categories_by_title.get(title, "other")
-            hex_color = effective_colors.get(
-                category, self.DEFAULT_CATEGORY_COLORS["other"]
-            )
+            category = categories_by_title.get(title, "unmatched")
+            hex_color = schema_colors.get(category)
+            if not hex_color:
+                continue
             color = QColor(hex_color)
             color.setAlpha(180)
             event.color = color
