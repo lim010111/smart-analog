@@ -10,7 +10,12 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from src.ui.clock import AnalogClock
 from src.ui.menu import ClockContextMenu
-from src.ui.dialogs import AppleLoginDialog, CustomColorSchemaDialog
+from src.ui.dialogs import (
+    AppleLoginDialog,
+    CustomColorSchemaDialog,
+    NaturalInputPromptDialog,
+    NaturalInputPreviewDialog,
+)
 from src.services.calendar import CalendarService
 from src.services.providers.apple_provider import AppleCalendarProvider
 from caldav.lib.error import AuthorizationError
@@ -195,6 +200,47 @@ class MainClockWindow(AnalogClock):
         dialog = CustomColorSchemaDialog(ai_service, allowed_colors, self)
         if dialog.exec() == CustomColorSchemaDialog.Accepted:
             self.refresh_calendar_events()
+
+    def open_ai_natural_input(self):
+        ai_service = self.calendar_service.ai_natural_input_service
+        if not ai_service.is_ready():
+            reason = ai_service.get_unavailable_reason()
+            QMessageBox.warning(
+                self,
+                "AI Natural Input Unavailable",
+                f"{reason}\n\nCheck .env settings and try again.",
+            )
+            return
+
+        input_dialog = NaturalInputPromptDialog(self)
+        if input_dialog.exec() != NaturalInputPromptDialog.Accepted:
+            return
+
+        source_text = input_dialog.input_text()
+        if not source_text:
+            QMessageBox.warning(
+                self,
+                "Input Required",
+                "Please enter a schedule sentence.",
+            )
+            return
+
+        self.setCursor(Qt.WaitCursor)
+        try:
+            result = ai_service.parse(source_text)
+        finally:
+            self.unsetCursor()
+
+        if result is None:
+            QMessageBox.warning(
+                self,
+                "Parse Failed",
+                "Could not parse the input. Check your configuration and try again.",
+            )
+            return
+
+        preview_dialog = NaturalInputPreviewDialog(source_text, result, self)
+        preview_dialog.exec()
 
     def apply_ai_colors_to_all_events(self):
         if not self.calendar_service.can_write_event_colors():

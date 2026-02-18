@@ -113,6 +113,10 @@ class ClockContextMenu(QMenu):
         color_schema_action.triggered.connect(self.clock.open_color_schema)
         self.addAction(color_schema_action)
 
+        natural_input_action = QAction("AI Natural Input", self)
+        natural_input_action.triggered.connect(self.clock.open_ai_natural_input)
+        self.addAction(natural_input_action)
+
         sync_all_color_action = QAction("Apply AI Colors to All Events", self)
         sync_all_color_action.triggered.connect(
             self.clock.apply_ai_colors_to_all_events

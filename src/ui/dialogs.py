@@ -1,3 +1,5 @@
+import json
+
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -8,6 +10,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QWidget,
+    QTextEdit,
 )
 from PySide6.QtCore import Qt
 
@@ -321,3 +324,116 @@ class CustomColorSchemaDialog(QDialog):
         schema.save()
         self.ai_service.reload_schema()
         self.accept()
+
+
+class NaturalInputPromptDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("AI Natural Input")
+        self.setFixedSize(460, 180)
+        self.setStyleSheet(_DARK_DIALOG_STYLE)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 14, 16, 14)
+
+        title = QLabel("Parse Natural Language")
+        title.setStyleSheet("font-size: 14px; font-weight: 600; color: white;")
+        layout.addWidget(title)
+
+        hint = QLabel(
+            "Enter one sentence describing a schedule. "
+            "Result is preview-only in phase 1."
+        )
+        hint.setStyleSheet("font-size: 10px; color: #8f8f8f;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._text_input = QLineEdit()
+        self._text_input.setPlaceholderText(
+            "예: 내일 오후 3시에 디자인 리뷰 미팅 잡아줘"
+        )
+        self._text_input.returnPressed.connect(self.accept)
+        layout.addWidget(self._text_input)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("cancelBtn")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        parse_btn = QPushButton("Parse")
+        parse_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(parse_btn)
+
+        layout.addLayout(btn_layout)
+
+    def input_text(self) -> str:
+        return self._text_input.text().strip()
+
+
+class NaturalInputPreviewDialog(QDialog):
+    def __init__(self, source_text: str, result, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("AI Natural Input Preview")
+        self.setMinimumSize(500, 420)
+        self.setStyleSheet(_DARK_DIALOG_STYLE)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(16, 14, 16, 14)
+
+        title = QLabel("Parsed Schedule Draft")
+        title.setStyleSheet("font-size: 14px; font-weight: 600; color: white;")
+        layout.addWidget(title)
+
+        source_label = QLabel(f"Input: {source_text}")
+        source_label.setStyleSheet("font-size: 11px; color: #b0b0b0;")
+        source_label.setWordWrap(True)
+        layout.addWidget(source_label)
+
+        details = [
+            ("Intent", str(result.intent)),
+            ("Title", str(result.title) or "-"),
+            ("Start", self._format_dt(result.start_time)),
+            ("End", self._format_dt(result.end_time)),
+            ("All Day", "Yes" if result.all_day else "No"),
+            ("Confidence", f"{result.confidence:.2f}"),
+        ]
+        for key, value in details:
+            row = QLabel(f"{key}: {value}")
+            row.setStyleSheet("font-size: 11px; color: #d5d5d5;")
+            row.setWordWrap(True)
+            layout.addWidget(row)
+
+        note_text = str(result.note or "")
+        if note_text:
+            note = QLabel(f"Note: {note_text}")
+            note.setStyleSheet("font-size: 10px; color: #f0bd60;")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+
+        raw_label = QLabel("Raw JSON")
+        raw_label.setStyleSheet("font-size: 10px; color: #8f8f8f;")
+        layout.addWidget(raw_label)
+
+        raw_view = QTextEdit()
+        raw_view.setReadOnly(True)
+        raw_view.setMinimumHeight(160)
+        raw_view.setPlainText(json.dumps(result.raw, ensure_ascii=False, indent=2))
+        layout.addWidget(raw_view, 1)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+    @staticmethod
+    def _format_dt(value) -> str:
+        if value is None:
+            return "-"
+        try:
+            return value.strftime("%Y-%m-%d %H:%M (%Z)")
+        except Exception:
+            return str(value)
