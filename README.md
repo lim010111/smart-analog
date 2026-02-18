@@ -74,29 +74,6 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_TIMEOUT=8
 ```
 
-### AI 일정 색상 분류 (선택)
-
-OpenAI API 키와 사용자 정의 색상 스키마를 설정하면 일정 제목을 카테고리로 분류하여 색상을 자동으로 적용합니다.
-
-1. `.env.template`을 `.env`로 복사합니다.
-2. 아래 값을 설정합니다.
-
-```bash
-ENABLE_AI_EVENT_COLOR=true
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_COLOR_MODEL=gpt-4o-mini
-```
-
-3. 우클릭 메뉴 > **Color Schema** 에서 색상-카테고리 규칙을 정의합니다.
-   - 선택 가능한 색상은 현재 캘린더 프로바이더가 실제로 저장 가능한 색상만 표시됩니다.
-4. **Generate Keywords** 버튼으로 AI가 각 카테고리에 맞는 키워드를 자동 생성합니다.
-5. 우클릭 메뉴 > **Apply AI Colors to All Events** 로 전체 일정 범위에 색상을 일괄 적용할 수 있습니다.
-
-> [!NOTE]
-> 색상 스키마가 설정되지 않으면 색상 분류가 적용되지 않습니다.
-> API 키가 없거나 호출이 실패하면 스키마의 키워드 기반 로컬 분류로 자동 폴백됩니다.
-> 색상 적용 후 캘린더 이벤트 색상 write-back은 프로바이더가 지원할 때만 수행됩니다.
-> 전체 일정 일괄 적용은 API 호출량이 많을 수 있어 처리 시간이 길어질 수 있습니다.
 ---
 
 ## 프로젝트 구조
@@ -114,7 +91,6 @@ clock_widget/
 │   │   ├── calendar.py                  # 프로바이더 매니저
 │   │   ├── ai/
 │   │   │   └── core/                    # OpenAI 공통 코어(설정/클라이언트/파서)
-│   │   │   └── event_coloring.py        # OpenAI 기반 일정 색상 분류
 │   │   └── providers/
 │   │       ├── base.py                  # CalendarProvider ABC
 │   │       ├── google_provider.py       # Google Calendar 구현
