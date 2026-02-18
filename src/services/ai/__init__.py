@@ -10,11 +10,14 @@ from src.services.ai.core import (
     read_float_env,
     read_int_env,
 )
+from src.services.ai.natural_input import AINaturalInputService, NaturalInputParseResult
 
 __all__ = [
     "EventContext",
     "OpenAIConfig",
     "OpenAIJSONClient",
+    "AINaturalInputService",
+    "NaturalInputParseResult",
     "build_event_context",
     "event_context_to_dicts",
     "load_openai_config",
