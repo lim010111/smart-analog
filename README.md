@@ -74,6 +74,17 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_TIMEOUT=8
 ```
 
+### AI Natural Input (feature/ai-natural-input)
+
+자연어 문장을 일정 의도로 파싱하는 초기 서비스 스캐폴딩이 추가되었습니다.
+
+```bash
+ENABLE_AI_NATURAL_INPUT=false
+OPENAI_NATURAL_INPUT_MODEL=gpt-4o-mini
+OPENAI_NATURAL_INPUT_TIMEOUT=8
+OPENAI_NATURAL_INPUT_MAX_CHARS=300
+```
+
 ---
 
 ## 프로젝트 구조
