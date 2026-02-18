@@ -100,14 +100,24 @@ OPENAI_COLOR_MODEL=gpt-4o-mini
 
 ### AI Natural Input (feature/ai-natural-input)
 
-자연어 문장을 일정 의도로 파싱하는 초기 서비스 스캐폴딩이 추가되었습니다.
+자연어 문장을 일정 의도로 파싱하는 1차(MVP) 기능이 추가되었습니다.
+현재 단계에서는 캘린더에 바로 저장하지 않고, 파싱 결과를 프리뷰 다이얼로그로 확인합니다.
 
 ```bash
 ENABLE_AI_NATURAL_INPUT=false
 OPENAI_NATURAL_INPUT_MODEL=gpt-4o-mini
 OPENAI_NATURAL_INPUT_TIMEOUT=8
 OPENAI_NATURAL_INPUT_MAX_CHARS=300
+OPENAI_NATURAL_INPUT_DEFAULT_DURATION_MINUTES=60
+OPENAI_NATURAL_INPUT_MIN_CONFIDENCE=0.6
 ```
+
+1. `.env.template`을 `.env`로 복사하고 `ENABLE_AI_NATURAL_INPUT=true`로 변경합니다.
+2. 우클릭 메뉴 > **AI Natural Input** 을 선택합니다.
+3. 한 문장으로 일정을 입력하면 파싱 결과(의도/시간/신뢰도)를 프리뷰로 확인할 수 있습니다.
+
+> [!NOTE]
+> 1차 범위에서는 파싱 프리뷰까지만 제공하며, 실제 캘린더 이벤트 생성은 포함되지 않습니다.
 
 ---
 
@@ -151,6 +161,7 @@ clock_widget/
   - **Always on Top**: 시계를 항상 최상위에 표시할지 여부를 토글합니다.
   - **Event Opacity**: 일정 영역의 투명도를 조절합니다.
   - **Calendar Provider**: Google / Apple 캘린더를 선택합니다.
+  - **AI Natural Input**: 자연어 문장을 파싱해 일정 드래프트를 프리뷰로 확인합니다.
   - **Sync Calendar**: 캘린더와 수동으로 동기화합니다.
   - **Refresh Events**: 일정을 새로고침합니다.
   - **Logout**: 현재 캘린더 계정에서 로그아웃합니다.
