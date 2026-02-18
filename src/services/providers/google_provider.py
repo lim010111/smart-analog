@@ -85,6 +85,23 @@ class GoogleCalendarProvider(CalendarProvider):
         return self.creds is not None and self.creds.valid and self.service is not None
 
     def get_todays_events(self, max_results: int = 20) -> list[CalendarEvent]:
+        now_local = datetime.datetime.now()
+        start_of_day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day = now_local.replace(hour=23, minute=59, second=59, microsecond=0)
+        return self.get_events_in_range(
+            start_of_day,
+            end_of_day,
+            max_results=max_results,
+            page_size=min(max_results, 250),
+        )
+
+    def get_events_in_range(
+        self,
+        start_time: datetime.datetime | None,
+        end_time: datetime.datetime | None,
+        max_results: int | None = None,
+        page_size: int = 250,
+    ) -> list[CalendarEvent]:
         if not self.service:
             self.authenticate()
         if not self.service:
@@ -92,104 +109,41 @@ class GoogleCalendarProvider(CalendarProvider):
         assert self.service is not None
         service = self.service
 
-        now_local = datetime.datetime.now()
-        start_of_day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_of_day = now_local.replace(hour=23, minute=59, second=59, microsecond=0)
+        safe_page_size = max(1, min(page_size, 2500))
 
-        time_min = (
-            start_of_day.astimezone(datetime.timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
-        time_max = (
-            end_of_day.astimezone(datetime.timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        list_args = {
+            "calendarId": "primary",
+            "maxResults": safe_page_size,
+            "singleEvents": True,
+        }
 
-        events_result = (
-            service.events()
-            .list(
-                calendarId="primary",
-                timeMin=time_min,
-                timeMax=time_max,
-                maxResults=max_results,
-                singleEvents=True,
-                orderBy="startTime",
-            )
-            .execute()
-        )
+        if start_time:
+            list_args["timeMin"] = self._to_google_time(start_time)
+            list_args["orderBy"] = "startTime"
+        if end_time:
+            list_args["timeMax"] = self._to_google_time(end_time)
 
-        items = events_result.get("items", [])
-        calendar_events = []
+        calendar_events: list[CalendarEvent] = []
+        page_token: str | None = None
 
-        for item in items:
-            start_data = item["start"]
-            end_data = item["end"]
+        while True:
+            call_args = dict(list_args)
+            if page_token:
+                call_args["pageToken"] = page_token
 
-            if "dateTime" not in start_data:
-                date_str = start_data.get("date")
-                if not date_str:
-                    continue
-                local_tz = datetime.datetime.now().astimezone().tzinfo
-                start_date = datetime.date.fromisoformat(date_str)
-                start_time = datetime.datetime.combine(
-                    start_date, datetime.time.min, tzinfo=local_tz
-                )
-                end_time = datetime.datetime.combine(
-                    start_date, datetime.time.max, tzinfo=local_tz
-                )
+            events_result = service.events().list(**call_args).execute()
+            items = events_result.get("items", [])
 
-                color_id = item.get("colorId")
-                event_color = None
-                if color_id in GOOGLE_COLORS:
-                    event_color = QColor(GOOGLE_COLORS[color_id])
-                    event_color.setAlpha(180)
+            for item in items:
+                parsed = self._item_to_calendar_event(item)
+                if parsed:
+                    calendar_events.append(parsed)
+                    if max_results is not None and len(calendar_events) >= max_results:
+                        return calendar_events
 
-                event_args = {
-                    "id": item["id"],
-                    "summary": item.get("summary", "(제목 없음)"),
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "all_day": True,
-                    "provider_color_id": color_id,
-                }
-                if event_color:
-                    event_args["color"] = event_color
-
-                calendar_events.append(CalendarEvent(**event_args))
-                continue
-
-            start_str = start_data["dateTime"]
-            end_str = end_data["dateTime"]
-
-            start_time = datetime.datetime.fromisoformat(
-                start_str.replace("Z", "+00:00")
-            )
-            if start_time.tzinfo is None:
-                start_time = start_time.replace(tzinfo=datetime.timezone.utc)
-
-            end_time = datetime.datetime.fromisoformat(end_str.replace("Z", "+00:00"))
-            if end_time.tzinfo is None:
-                end_time = end_time.replace(tzinfo=datetime.timezone.utc)
-
-            color_id = item.get("colorId")
-            event_color = None
-            if color_id in GOOGLE_COLORS:
-                event_color = QColor(GOOGLE_COLORS[color_id])
-                event_color.setAlpha(180)
-
-            event_args = {
-                "id": item["id"],
-                "summary": item.get("summary", "(제목 없음)"),
-                "start_time": start_time,
-                "end_time": end_time,
-                "provider_color_id": color_id,
-            }
-            if event_color:
-                event_args["color"] = event_color
-
-            calendar_events.append(CalendarEvent(**event_args))
+            page_token = events_result.get("nextPageToken")
+            if not page_token:
+                break
 
         return calendar_events
 
@@ -209,15 +163,16 @@ class GoogleCalendarProvider(CalendarProvider):
             if color_id in GOOGLE_COLORS
         }
 
-    def write_event_colors(self, events: list[CalendarEvent]) -> None:
+    def write_event_colors(self, events: list[CalendarEvent]) -> int:
         if not events:
-            return
+            return 0
         if not self.service:
             self.authenticate()
         if not self.service:
-            return
+            return 0
         assert self.service is not None
         service = self.service
+        updated_count = 0
 
         for event in events:
             color_id = self._color_id_from_hex(event.color.name())
@@ -233,8 +188,11 @@ class GoogleCalendarProvider(CalendarProvider):
                     body={"colorId": color_id},
                 ).execute()
                 event.provider_color_id = color_id
+                updated_count += 1
             except Exception:
                 continue
+
+        return updated_count
 
     def _color_id_from_hex(self, hex_color: str) -> str | None:
         target = str(hex_color or "").strip().lower()
@@ -242,3 +200,61 @@ class GoogleCalendarProvider(CalendarProvider):
             if color_hex.lower() == target:
                 return color_id
         return None
+
+    def _to_google_time(self, value: datetime.datetime) -> str:
+        if value.tzinfo is None:
+            value = value.astimezone()
+        return (
+            value.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+
+    def _item_to_calendar_event(self, item: dict) -> CalendarEvent | None:
+        start_data = item.get("start", {})
+        end_data = item.get("end", {})
+
+        if "dateTime" not in start_data:
+            date_str = start_data.get("date")
+            if not date_str:
+                return None
+            local_tz = datetime.datetime.now().astimezone().tzinfo
+            start_date = datetime.date.fromisoformat(date_str)
+            start_time = datetime.datetime.combine(
+                start_date, datetime.time.min, tzinfo=local_tz
+            )
+            end_time = datetime.datetime.combine(
+                start_date, datetime.time.max, tzinfo=local_tz
+            )
+            all_day = True
+        else:
+            start_str = start_data["dateTime"]
+            end_str = end_data.get("dateTime", start_str)
+            start_time = datetime.datetime.fromisoformat(
+                start_str.replace("Z", "+00:00")
+            )
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=datetime.timezone.utc)
+            end_time = datetime.datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            if end_time.tzinfo is None:
+                end_time = end_time.replace(tzinfo=datetime.timezone.utc)
+            all_day = False
+
+        color_id = item.get("colorId")
+        event_color = None
+        if color_id in GOOGLE_COLORS:
+            event_color = QColor(GOOGLE_COLORS[color_id])
+            event_color.setAlpha(180)
+
+        event_args = {
+            "id": item.get("id", ""),
+            "summary": item.get("summary", "(제목 없음)"),
+            "start_time": start_time,
+            "end_time": end_time,
+            "all_day": all_day,
+            "provider_color_id": color_id,
+        }
+        if event_color:
+            event_args["color"] = event_color
+
+        if not event_args["id"]:
+            return None
+        return CalendarEvent(**event_args)
