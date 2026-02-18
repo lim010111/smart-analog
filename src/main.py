@@ -152,8 +152,25 @@ class MainClockWindow(AnalogClock):
         )
 
     def open_color_schema(self):
+        if not self.calendar_service.can_write_event_colors():
+            QMessageBox.warning(
+                self,
+                "Unsupported Provider",
+                "Current calendar provider does not support event color write.",
+            )
+            return
+
+        allowed_colors = self.calendar_service.get_supported_ai_colors()
+        if not allowed_colors:
+            QMessageBox.warning(
+                self,
+                "No Color Palette",
+                "No writable color palette available for current provider.",
+            )
+            return
+
         ai_service = self.calendar_service.ai_event_color_service
-        dialog = CustomColorSchemaDialog(ai_service, self)
+        dialog = CustomColorSchemaDialog(ai_service, allowed_colors, self)
         if dialog.exec() == CustomColorSchemaDialog.Accepted:
             self.refresh_calendar_events()
 

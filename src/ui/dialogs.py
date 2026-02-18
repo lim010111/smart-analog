@@ -8,10 +8,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QWidget,
-    QColorDialog,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 
 from src.services.providers.apple_provider import AppleCalendarProvider
 
@@ -138,7 +136,7 @@ _DARK_DIALOG_STYLE = """
     QScrollArea { border: none; background-color: transparent; }
 """
 
-DEFAULT_ROW_COLORS = [
+FALLBACK_ROW_COLORS = [
     "#f45b69",
     "#4f83ff",
     "#3cb371",
@@ -151,10 +149,15 @@ DEFAULT_ROW_COLORS = [
 
 
 class CustomColorSchemaDialog(QDialog):
-    def __init__(self, ai_service, parent=None):
+    def __init__(self, ai_service, allowed_colors: list[str], parent=None):
         super().__init__(parent)
         self.ai_service = ai_service
         self._rows: list[dict] = []
+        self._allowed_colors = [
+            color.lower() for color in allowed_colors if str(color).strip()
+        ]
+        if not self._allowed_colors:
+            self._allowed_colors = list(FALLBACK_ROW_COLORS)
 
         self.setWindowTitle("Color Schema")
         self.setMinimumSize(480, 400)
@@ -169,7 +172,7 @@ class CustomColorSchemaDialog(QDialog):
         layout.addWidget(title)
 
         hint = QLabel(
-            "Define color-category rules. Click Generate to create keywords via AI."
+            "Define color-category rules with calendar-supported colors only."
         )
         hint.setStyleSheet("font-size: 10px; color: #888;")
         hint.setWordWrap(True)
@@ -221,8 +224,8 @@ class CustomColorSchemaDialog(QDialog):
             self._add_row(rule.color_hex, rule.label)
 
     def _next_color(self) -> str:
-        idx = len(self._rows) % len(DEFAULT_ROW_COLORS)
-        return DEFAULT_ROW_COLORS[idx]
+        idx = len(self._rows) % len(self._allowed_colors)
+        return self._allowed_colors[idx]
 
     def _add_empty_row(self):
         self._add_row(self._next_color(), "")
@@ -261,12 +264,14 @@ class CustomColorSchemaDialog(QDialog):
         self._rows_layout.insertWidget(insert_pos, row_widget)
 
     def _pick_color(self, btn: QPushButton):
-        current = QColor(btn.property("color_hex"))
-        color = QColorDialog.getColor(current, self, "Select Color")
-        if color.isValid():
-            hex_val = color.name()
-            btn.setStyleSheet(f"background-color: {hex_val};")
-            btn.setProperty("color_hex", hex_val)
+        current = str(btn.property("color_hex") or "").strip().lower()
+        try:
+            idx = self._allowed_colors.index(current)
+        except ValueError:
+            idx = -1
+        next_color = self._allowed_colors[(idx + 1) % len(self._allowed_colors)]
+        btn.setStyleSheet(f"background-color: {next_color};")
+        btn.setProperty("color_hex", next_color)
 
     def _remove_row(self, row_widget: QWidget):
         self._rows = [r for r in self._rows if r["widget"] is not row_widget]
@@ -282,6 +287,8 @@ class CustomColorSchemaDialog(QDialog):
             if not label:
                 continue
             color_hex = row["color_btn"].property("color_hex")
+            if str(color_hex).lower() not in self._allowed_colors:
+                continue
             rules.append(ColorRule(color_hex=color_hex, label=label))
         return rules
 
