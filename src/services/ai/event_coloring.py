@@ -25,6 +25,7 @@ class AIEventColorService:
         self.timeout_seconds = float(os.getenv("OPENAI_COLOR_TIMEOUT", "8"))
         self.max_titles = int(os.getenv("OPENAI_COLOR_MAX_TITLES", "30"))
         self._custom_schema = CustomColorSchema()
+        self._supported_palette: list[str] = []
 
     @property
     def custom_schema(self) -> CustomColorSchema:
@@ -32,9 +33,31 @@ class AIEventColorService:
 
     def reload_schema(self) -> None:
         self._custom_schema.load()
+        if self._supported_palette:
+            self._custom_schema.restrict_to_palette(self._supported_palette)
+
+    def set_supported_palette(self, palette: list[str]) -> None:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in palette:
+            color_hex = str(value or "").strip().lower()
+            if not color_hex or color_hex in seen:
+                continue
+            seen.add(color_hex)
+            normalized.append(color_hex)
+        self._supported_palette = normalized
+        self._custom_schema.restrict_to_palette(self._supported_palette)
+
+    def get_supported_palette(self) -> list[str]:
+        return list(self._supported_palette)
 
     def apply(self, events: list[CalendarEvent]) -> list[CalendarEvent]:
-        if not events or not self.enabled or self._custom_schema.is_empty:
+        if (
+            not events
+            or not self.enabled
+            or not self._supported_palette
+            or self._custom_schema.is_empty
+        ):
             return events
 
         titles = self._collect_titles(events)
@@ -199,6 +222,8 @@ class AIEventColorService:
             category = categories_by_title.get(title, "unmatched")
             hex_color = schema_colors.get(category)
             if not hex_color:
+                continue
+            if hex_color.lower() not in self._supported_palette:
                 continue
             color = QColor(hex_color)
             color.setAlpha(180)

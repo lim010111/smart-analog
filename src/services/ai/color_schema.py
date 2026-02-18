@@ -58,6 +58,21 @@ class CustomColorSchema:
         with open(self.schema_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
+    def restrict_to_palette(self, palette: list[str]) -> None:
+        allowed = {
+            str(color).strip().lower() for color in palette if str(color).strip()
+        }
+        if not allowed:
+            self.rules = []
+            return
+
+        filtered: list[ColorRule] = []
+        for rule in self.rules:
+            color_hex = str(rule.color_hex).strip().lower()
+            if color_hex in allowed:
+                filtered.append(rule)
+        self.rules = filtered
+
     def to_category_colors(self) -> dict[str, str]:
         return {
             self._rule_key(rule): rule.color_hex

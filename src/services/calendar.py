@@ -41,6 +41,7 @@ class CalendarService:
             self._providers[key] = PROVIDER_REGISTRY[key]()
 
         self._active_provider_key = key
+        self._sync_ai_palette_with_provider(self._providers[key])
         return self._providers[key]
 
     def authenticate(self) -> None:
@@ -54,8 +55,37 @@ class CalendarService:
         if not provider:
             return []
 
+        self._sync_ai_palette_with_provider(provider)
+
         events = provider.get_todays_events(max_results)
-        return self._ai_event_color_service.apply(events)
+        if not provider.supports_event_color_write():
+            return events
+
+        updated_events = self._ai_event_color_service.apply(events)
+        provider.write_event_colors(updated_events)
+        return updated_events
+
+    def get_supported_ai_colors(self) -> list[str]:
+        provider = self.active_provider
+        if not provider:
+            return []
+        return [
+            color.lower()
+            for color in provider.get_supported_event_colors().values()
+            if str(color).strip()
+        ]
+
+    def can_write_event_colors(self) -> bool:
+        provider = self.active_provider
+        return provider.supports_event_color_write() if provider else False
+
+    def _sync_ai_palette_with_provider(self, provider: CalendarProvider) -> None:
+        palette = [
+            color.lower()
+            for color in provider.get_supported_event_colors().values()
+            if str(color).strip()
+        ]
+        self._ai_event_color_service.set_supported_palette(palette)
 
     def logout(self) -> None:
         provider = self.active_provider
