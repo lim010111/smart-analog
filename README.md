@@ -117,14 +117,32 @@ OPENAI_NATURAL_INPUT_MAX_CHARS=300
 ```bash
 ENABLE_AI_TODAY_BRIEFING=false
 ENABLE_AI_TODAY_BRIEFING_TTS=false
+AI_TTS_BACKEND=openai
 OPENAI_BRIEFING_MODEL=gpt-4o-mini
 OPENAI_BRIEFING_TIMEOUT=8
 OPENAI_BRIEFING_MAX_EVENTS=20
+OPENAI_TTS_MODEL=gpt-4o-mini-tts
+OPENAI_TTS_VOICE=marin
+OPENAI_TTS_INSTRUCTIONS=
+OPENAI_TTS_TIMEOUT=15
+OPENAI_TTS_AUDIO_CACHE_DIR=
 ```
 
 > [!NOTE]
-> TTS는 시스템/Qt 백엔드가 지원될 때만 동작합니다.
+> OpenAI TTS는 `OPENAI_API_KEY`가 필요합니다.
 > 미지원 환경에서는 브리핑 텍스트만 표시됩니다.
+
+`AI_TTS_BACKEND`로 TTS 백엔드를 선택할 수 있습니다.
+
+- `openai` (기본): OpenAI Audio Speech API(`gpt-4o-mini-tts`) 사용
+- `qt`: 시스템 Qt TTS 백엔드 사용
+- `auto`: OpenAI 시도 후 실패하면 Qt로 폴백
+
+OpenAI TTS는 `/v1/audio/speech` 엔드포인트를 사용하며 기본 출력 포맷은 `wav`입니다.
+앱은 생성된 음성을 임시 파일로 저장한 뒤 재생합니다.
+
+> [!TIP]
+> OpenAI 문서 기준 TTS 음성은 영어에 최적화되어 있지만 한국어 입력도 지원됩니다.
 
 #### Linux TTS 설정 (선택)
 
@@ -168,6 +186,7 @@ clock_widget/
 │   │   ├── ai/
 │   │   │   └── core/                    # OpenAI 공통 코어(설정/클라이언트/파서)
 │   │   │   └── briefing.py              # OpenAI 기반 오늘의 브리핑 생성
+│   │   │   └── tts.py                   # OpenAI/Qt 선택형 TTS 어댑터
 │   │   │   └── event_coloring.py        # OpenAI 기반 일정 색상 분류
 │   │   │   └── natural_input.py         # OpenAI 기반 자연어 입력 파싱
 │   │   └── providers/
