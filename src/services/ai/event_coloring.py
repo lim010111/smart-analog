@@ -1,29 +1,34 @@
-import json
-import importlib
-import os
 from collections.abc import Iterable
 
-from dotenv import load_dotenv
 from PySide6.QtGui import QColor
 
 from src.models.event import CalendarEvent
 from src.services.ai.color_schema import ColorRule, CustomColorSchema
-
-
-def _to_bool(value: str | None, default: bool = False) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+from src.services.ai.core import (
+    OpenAIJSONClient,
+    load_openai_config,
+    read_bool_env,
+    read_int_env,
+    request_json_or_empty,
+)
 
 
 class AIEventColorService:
     def __init__(self):
-        load_dotenv()
-        self.enabled = _to_bool(os.getenv("ENABLE_AI_EVENT_COLOR"), default=False)
-        self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        self.model = os.getenv("OPENAI_COLOR_MODEL", "gpt-4o-mini").strip()
-        self.timeout_seconds = float(os.getenv("OPENAI_COLOR_TIMEOUT", "8"))
-        self.max_titles = int(os.getenv("OPENAI_COLOR_MAX_TITLES", "30"))
+        self.enabled = read_bool_env("ENABLE_AI_EVENT_COLOR", default=False)
+        self.max_titles = max(1, read_int_env("OPENAI_COLOR_MAX_TITLES", default=30))
+
+        openai_config = load_openai_config(
+            model_env="OPENAI_COLOR_MODEL",
+            timeout_env="OPENAI_COLOR_TIMEOUT",
+            default_model="gpt-4o-mini",
+            default_timeout=8.0,
+        )
+        self._openai_client = OpenAIJSONClient(openai_config)
+        self.api_key = openai_config.api_key
+        self.model = openai_config.model
+        self.timeout_seconds = openai_config.timeout_seconds
+
         self._custom_schema = CustomColorSchema()
         self._supported_palette: list[str] = []
 
@@ -87,27 +92,14 @@ class AIEventColorService:
         return unique_titles[: self.max_titles]
 
     def _classify_titles(self, titles: list[str]) -> dict[str, str]:
-        if self.api_key:
+        if self._openai_client.is_available():
             categories = self._classify_with_openai(titles)
             if categories:
                 return categories
 
         return self._classify_with_keywords(titles)
 
-    def _get_openai_client(self):
-        try:
-            module_name = "open" + "ai"
-            openai_module = importlib.import_module(module_name)
-            OpenAI = getattr(openai_module, "OpenAI")
-            return OpenAI(api_key=self.api_key, timeout=self.timeout_seconds)
-        except Exception:
-            return None
-
     def _classify_with_openai(self, titles: list[str]) -> dict[str, str]:
-        client = self._get_openai_client()
-        if not client:
-            return {}
-
         prompt = {
             "titles": titles,
             "allowed_categories": sorted(
@@ -121,34 +113,18 @@ class AIEventColorService:
             ),
         }
 
-        try:
-            response = client.responses.create(
-                model=self.model,
-                max_output_tokens=500,
-                input=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You classify calendar event titles. "
-                            "Use only allowed_categories. "
-                            "If uncertain, use 'unmatched'. "
-                            "Respond with valid JSON only."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(prompt, ensure_ascii=False),
-                    },
-                ],
-            )
-        except Exception:
-            return {}
-
-        raw_text = getattr(response, "output_text", "")
-        if not raw_text:
-            return {}
-
-        data = self._parse_json_object(raw_text)
+        data = request_json_or_empty(
+            self._openai_client,
+            system_prompt=(
+                "You classify calendar event titles. "
+                "Use only allowed_categories. "
+                "If uncertain, use 'unmatched'. "
+                "Respond with valid JSON only."
+            ),
+            user_payload=prompt,
+            max_output_tokens=500,
+            model=self.model,
+        )
         if not data:
             return {}
 
@@ -166,28 +142,6 @@ class AIEventColorService:
                 categories[title.lower()] = category
 
         return categories
-
-    def _parse_json_object(self, raw_text: str) -> dict:
-        try:
-            parsed = json.loads(raw_text)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            pass
-
-        start = raw_text.find("{")
-        end = raw_text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return {}
-
-        try:
-            parsed = json.loads(raw_text[start : end + 1])
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            return {}
-
-        return {}
 
     def _classify_with_keywords(self, titles: list[str]) -> dict[str, str]:
         schema_rules = self._custom_schema.to_keyword_rules()
@@ -230,11 +184,7 @@ class AIEventColorService:
             event.color = color
 
     def generate_keywords_for_rules(self, rules: list[ColorRule]) -> list[ColorRule]:
-        if not self.api_key or not rules:
-            return rules
-
-        client = self._get_openai_client()
-        if not client:
+        if not self._openai_client.is_available() or not rules:
             return rules
 
         labels = [rule.label for rule in rules if rule.label.strip()]
@@ -251,35 +201,19 @@ class AIEventColorService:
             ),
         }
 
-        try:
-            response = client.responses.create(
-                model=self.model,
-                max_output_tokens=1000,
-                input=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You generate keywords for calendar event categories. "
-                            "Keywords should be short, lowercase words or phrases "
-                            "that commonly appear in calendar event titles. "
-                            "Include both Korean and English keywords. "
-                            "Respond with valid JSON only."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(prompt, ensure_ascii=False),
-                    },
-                ],
-            )
-        except Exception:
-            return rules
-
-        raw_text = getattr(response, "output_text", "")
-        if not raw_text:
-            return rules
-
-        data = self._parse_json_object(raw_text)
+        data = request_json_or_empty(
+            self._openai_client,
+            system_prompt=(
+                "You generate keywords for calendar event categories. "
+                "Keywords should be short, lowercase words or phrases "
+                "that commonly appear in calendar event titles. "
+                "Include both Korean and English keywords. "
+                "Respond with valid JSON only."
+            ),
+            user_payload=prompt,
+            max_output_tokens=1000,
+            model=self.model,
+        )
         if not data:
             return rules
 
