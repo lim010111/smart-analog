@@ -667,49 +667,6 @@ def update_color_schema(
         raise HTTPException(status_code=500, detail=str(error)) from error
 
 
-@app.post("/api/colors/schema/generate-keywords")
-def generate_color_keywords(
-    request: ColorSchemaRequest,
-    provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
-) -> dict[str, object]:
-    try:
-        calendar = _build_calendar_service(provider)
-        _require_provider_credentials(calendar)
-        service = calendar.ai_event_color_service
-        rules = [
-            ColorRule(
-                color_hex=item.color_hex.strip().lower(),
-                label=item.label.strip(),
-                keywords=[kw.strip().lower() for kw in item.keywords if kw.strip()],
-            )
-            for item in request.rules
-            if item.label.strip()
-        ]
-
-        generated = service.generate_keywords_for_rules(rules)
-        service.custom_schema.rules = generated
-        service.custom_schema.save()
-        service.reload_schema()
-
-        return {
-            "provider": provider,
-            "rules": [
-                {
-                    "color_hex": rule.color_hex,
-                    "label": rule.label,
-                    "keywords": rule.keywords,
-                }
-                for rule in generated
-            ],
-        }
-    except HTTPException:
-        raise
-    except ValueError as error:
-        raise HTTPException(status_code=401, detail=str(error)) from error
-    except Exception as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
-
-
 @app.post("/api/colors/apply-all")
 def apply_colors_all(
     provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
