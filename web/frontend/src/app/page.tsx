@@ -10,11 +10,12 @@ import {
   useRef,
   useState,
 } from "react";
+import Link from "next/link";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? process.env.BACKEND_URL ?? "http://localhost:8000";
 
-const CLOCK_SIZE = 340;
+const CLOCK_SIZE = 460;
 const REQUEST_TIMEOUT_MS = 15000;
 
 type ThemeName = "dark" | "light";
@@ -495,7 +496,7 @@ export default function Home() {
   const [applePassword, setApplePassword] = useState("");
 
   const [palette, setPalette] = useState<string[]>([]);
-  const [schemaRules, setSchemaRules] = useState<ColorRule[]>([]);
+  const [schemaRuleCount, setSchemaRuleCount] = useState(0);
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
 
@@ -581,7 +582,7 @@ export default function Home() {
       const schemaData = await fetchJson<{ rules: ColorRule[] }>(
         `${API_BASE_URL}/api/colors/schema?provider=${provider}`,
       );
-      setSchemaRules(schemaData.rules ?? []);
+      setSchemaRuleCount((schemaData.rules ?? []).length);
     } finally {
       setSchemaLoading(false);
     }
@@ -721,62 +722,6 @@ export default function Home() {
     }
   };
 
-  const onSaveSchema = async () => {
-    setSchemaLoading(true);
-    setMessage("");
-    try {
-      await fetchJson(`${API_BASE_URL}/api/colors/schema?provider=${provider}`, {
-        method: "PUT",
-        body: JSON.stringify({ rules: schemaRules }),
-      });
-      setMessage("색상 스키마를 저장했습니다.");
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
-    } finally {
-      setSchemaLoading(false);
-    }
-  };
-
-  const onGenerateKeywords = async () => {
-    setSchemaLoading(true);
-    setMessage("");
-    try {
-      const data = await fetchJson<{ rules: ColorRule[] }>(
-        `${API_BASE_URL}/api/colors/schema/generate-keywords?provider=${provider}`,
-        {
-          method: "POST",
-          body: JSON.stringify({ rules: schemaRules }),
-        },
-      );
-      setSchemaRules(data.rules ?? []);
-      setMessage("AI 키워드를 생성했습니다.");
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
-    } finally {
-      setSchemaLoading(false);
-    }
-  };
-
-  const onApplyAllColors = async () => {
-    setSchemaLoading(true);
-    setMessage("");
-    try {
-      const result = await fetchJson<{ processed: number; updated: number }>(
-        `${API_BASE_URL}/api/colors/apply-all?provider=${provider}`,
-        { method: "POST" },
-      );
-      setMessage(`AI 색상 적용 완료: 처리 ${result.processed}, 업데이트 ${result.updated}`);
-      await loadEvents();
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
-    } finally {
-      setSchemaLoading(false);
-    }
-  };
-
   const onAuthenticateProvider = async () => {
     setMessage("");
     try {
@@ -830,19 +775,6 @@ export default function Home() {
     }
   };
 
-  const addRule = () => {
-    const fallbackColor = palette[0] ?? "#a4bdfc";
-    setSchemaRules((prev) => [...prev, { color_hex: fallbackColor, label: "", keywords: [] }]);
-  };
-
-  const updateRule = (index: number, updater: (rule: ColorRule) => ColorRule) => {
-    setSchemaRules((prev) => prev.map((rule, idx) => (idx === index ? updater(rule) : rule)));
-  };
-
-  const removeRule = (index: number) => {
-    setSchemaRules((prev) => prev.filter((_, idx) => idx !== index));
-  };
-
   const updateSetting = async <K extends keyof WebSettings>(key: K, value: WebSettings[K]) => {
     const next = { ...settings, [key]: value };
     setSettings(next);
@@ -876,280 +808,282 @@ export default function Home() {
   };
 
   const rootClass = settings.theme === "light" ? "theme-light" : "theme-dark";
+  const previewEvents = useMemo(() => (eventsData?.events ?? []).slice(0, 4), [eventsData?.events]);
 
   return (
     <div className={`page-shell ${rootClass}`}>
       <div className="page-backdrop" />
-      <main className="layout-grid">
-        <section className={`panel hero-panel ${settings.widget_pinned ? "pinned" : ""}`}>
+      <main className="clock-shell">
+        <section className={`panel clock-main-panel ${settings.widget_pinned ? "pinned" : ""}`}>
           <div className="hero-header">
             <p className="eyebrow">Clock Widget Web Full Service</p>
-            <h1>시계 렌더링 · 캘린더 · 브리핑 · 자연어 입력 · AI 색상</h1>
-          </div>
-          <div className="hero-controls">
-            <label>
-              Provider
-              <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-                <option value="google">Google</option>
-                <option value="apple">Apple</option>
-              </select>
-            </label>
-            <label>
-              Theme
-              <select
-                value={settings.theme}
-                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                  void updateSetting("theme", asThemeName(e.target.value));
-                }}
-              >
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-              </select>
-            </label>
-            <label>
-              Event Opacity
-              <input
-                type="range"
-                min={0}
-                max={255}
-                value={settings.event_opacity}
-                onChange={(e) => {
-                  void updateSetting("event_opacity", Number(e.target.value));
-                }}
-              />
-            </label>
-            <button onClick={() => void loadEvents()} disabled={eventsLoading}>
-              {eventsLoading ? "Loading..." : "Refresh Events"}
-            </button>
-            <button onClick={() => void loadBriefing()} disabled={briefingLoading || !settings.briefing_enabled}>
-              {briefingLoading ? "Loading..." : "Refresh Briefing"}
-            </button>
-            <button onClick={() => void loadColorState()} disabled={schemaLoading}>
-              {schemaLoading ? "Loading..." : "Reload Color Schema"}
-            </button>
-            <button onClick={() => void onAuthenticateProvider()}>Sync Calendar</button>
-            <button onClick={() => void onLogoutProvider()}>Logout</button>
-          </div>
-          {provider === "apple" ? (
-            <div className="apple-auth">
-              <label>
-                Apple ID
-                <input
-                  type="text"
-                  value={appleId}
-                  onChange={(e) => setAppleId(e.target.value)}
-                  placeholder="apple id email"
-                />
-              </label>
-              <label>
-                App Password
-                <input
-                  type="password"
-                  value={applePassword}
-                  onChange={(e) => setApplePassword(e.target.value)}
-                  placeholder="app specific password"
-                />
-              </label>
-              <button onClick={() => void onSaveAppleCredentials()}>Save Apple Credentials</button>
-            </div>
-          ) : null}
-          <div className="toggle-row">
-            <label>
-              <input
-                type="checkbox"
-                checked={settings.briefing_enabled}
-                onChange={(e) => {
-                  void updateSetting("briefing_enabled", e.target.checked);
-                }}
-              />
-              Today Briefing
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={settings.briefing_tts_enabled}
-                onChange={(e) => {
-                  void updateSetting("briefing_tts_enabled", e.target.checked);
-                }}
-              />
-              Briefing TTS
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={settings.widget_pinned}
-                onChange={(e) => {
-                  void updateSetting("widget_pinned", e.target.checked);
-                }}
-              />
-              Widget Pinned
-            </label>
+            <h1>실시간 시계를 중심으로 일정과 AI 기능을 한 화면에서 관리</h1>
           </div>
           {message ? <p className="notice">{message}</p> : null}
-        </section>
 
-        <section className="panel clock-panel">
-          <header className="panel-head">
+          <header className="panel-head clock-main-head">
             <h2>Analog Clock</h2>
             <small>{clockNow.toLocaleTimeString("ko-KR")}</small>
           </header>
+
           <div className="clock-wrapper" onMouseMove={handleClockMouseMove} onMouseLeave={handleClockMouseLeave}>
             <canvas ref={clockRef} width={CLOCK_SIZE} height={CLOCK_SIZE} className="clock-canvas" />
             {hoverInfo ? (
               <div
                 className="event-tooltip"
-                style={{ left: `${Math.min(CLOCK_SIZE - 210, hoverInfo.x + 12)}px`, top: `${Math.min(CLOCK_SIZE - 90, hoverInfo.y + 12)}px` }}
+                style={{
+                  left: `${Math.min(CLOCK_SIZE - 210, hoverInfo.x + 12)}px`,
+                  top: `${Math.min(CLOCK_SIZE - 90, hoverInfo.y + 12)}px`,
+                }}
               >
                 <strong>{hoverInfo.event.summary}</strong>
                 <span>{formatEventRange(hoverInfo.event)}</span>
               </div>
             ) : null}
           </div>
-        </section>
 
-        <section className="panel">
-          <header className="panel-head">
-            <h2>Today Briefing</h2>
-            <button
-              onClick={() => void onSpeakBriefing()}
-              disabled={!settings.briefing_tts_enabled || !briefingData?.briefing}
-            >
-              Speak Briefing
-            </button>
-          </header>
-          <div className="briefing-card">
-            {briefingData?.disabled ? (
-              <p>브리핑이 비활성화되어 있습니다. 위 설정에서 Today Briefing을 켜주세요.</p>
-            ) : briefingData ? (
-              <>
-                <p>{briefingData.briefing || "표시할 브리핑이 없습니다."}</p>
-                <small>
-                  events: {briefingData.event_count} · generated: {formatDateTime(briefingData.generated_at)}
-                </small>
-              </>
-            ) : (
-              <p>브리핑 데이터를 로딩 중입니다.</p>
-            )}
-          </div>
-        </section>
-
-        <section className="panel">
-          <header className="panel-head">
-            <h2>Natural Input</h2>
-            <div className="row-actions">
-              <button onClick={() => void onCreateFromNatural()} disabled={naturalLoading}>
-                Create Event
-              </button>
-            </div>
-          </header>
-          <form onSubmit={onParseNatural} className="natural-form">
-            <textarea
-              placeholder="예: 다음 주 화요일 오후 3시에 민지랑 카페 미팅 잡아줘"
-              value={naturalText}
-              onChange={(e) => setNaturalText(e.target.value)}
-            />
-            <button type="submit" disabled={naturalLoading}>
-              {naturalLoading ? "Parsing..." : "Parse"}
-            </button>
-          </form>
-          {naturalResult ? (
-            <div className="result-box">
-              <p>intent: {naturalResult.intent}</p>
-              <p>title: {naturalResult.title}</p>
-              <p>
-                time: {naturalResult.start_time ?? "-"} ~ {naturalResult.end_time ?? "-"}
-              </p>
-              <p>all_day: {String(naturalResult.all_day)}</p>
-              <p>confidence: {naturalResult.confidence.toFixed(2)}</p>
-              {naturalResult.note ? <p>note: {naturalResult.note}</p> : null}
-            </div>
-          ) : null}
-        </section>
-
-        <section className="panel">
-          <header className="panel-head">
-            <h2>AI Color Schema</h2>
-            <div className="row-actions">
-              <button onClick={addRule} disabled={schemaLoading || !hasEventColorSupport}>
-                Add Rule
-              </button>
-              <button onClick={() => void onGenerateKeywords()} disabled={schemaLoading || !schemaRules.length}>
-                Generate Keywords
-              </button>
-              <button onClick={() => void onSaveSchema()} disabled={schemaLoading}>
-                Save Schema
-              </button>
-              <button onClick={() => void onApplyAllColors()} disabled={schemaLoading || !hasEventColorSupport}>
-                Apply to All Events
-              </button>
-            </div>
-          </header>
-
-          <div className="schema-list">
-            {schemaRules.map((rule, index) => (
-              <div className="schema-item" key={`${rule.color_hex}-${index}`}>
-                <select
-                  value={rule.color_hex}
-                  onChange={(e) =>
-                    updateRule(index, (prev) => ({ ...prev, color_hex: e.target.value }))
-                  }
+          <div className="clock-meta-grid">
+            <article className="briefing-card">
+              <header className="panel-head">
+                <h2>Today Briefing</h2>
+                <button
+                  onClick={() => void onSpeakBriefing()}
+                  disabled={!settings.briefing_tts_enabled || !briefingData?.briefing}
                 >
-                  {palette.map((color) => (
-                    <option value={color} key={color}>
-                      {color}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  value={rule.label}
-                  placeholder="Category label"
-                  onChange={(e) =>
-                    updateRule(index, (prev) => ({ ...prev, label: e.target.value }))
-                  }
-                />
-                <input
-                  value={rule.keywords.join(", ")}
-                  placeholder="keyword1, keyword2"
-                  onChange={(e) =>
-                    updateRule(index, (prev) => ({
-                      ...prev,
-                      keywords: e.target.value
-                        .split(",")
-                        .map((kw) => kw.trim().toLowerCase())
-                        .filter(Boolean),
-                    }))
-                  }
-                />
-                <button onClick={() => removeRule(index)}>Remove</button>
+                  Speak Briefing
+                </button>
+              </header>
+              {briefingData?.disabled ? (
+                <p>브리핑이 비활성화되어 있습니다. 사이드바에서 Today Briefing을 켜주세요.</p>
+              ) : briefingData ? (
+                <>
+                  <p>{briefingData.briefing || "표시할 브리핑이 없습니다."}</p>
+                  <small>
+                    events: {briefingData.event_count} · generated: {formatDateTime(briefingData.generated_at)}
+                  </small>
+                </>
+              ) : (
+                <p>브리핑 데이터를 로딩 중입니다.</p>
+              )}
+            </article>
+
+            <article className="briefing-card">
+              <header className="panel-head">
+                <h2>Upcoming Snapshot</h2>
+                <small>{eventsData?.count ?? 0} events</small>
+              </header>
+              <div className="snapshot-list">
+                {previewEvents.map((event) => (
+                  <div className="snapshot-item" key={event.id}>
+                    <span className="color-dot" style={{ backgroundColor: event.color_hex || "#64748b" }} />
+                    <div>
+                      <strong>{event.summary}</strong>
+                      <p>{formatEventRange(event)}</p>
+                    </div>
+                  </div>
+                ))}
+                {!previewEvents.length ? <p>표시할 일정이 없습니다.</p> : null}
               </div>
-            ))}
-            {!schemaRules.length ? <p>아직 저장된 색상 규칙이 없습니다.</p> : null}
+            </article>
           </div>
         </section>
 
-        <section className="panel full-width">
-          <header className="panel-head">
-            <h2>Today Events ({eventsData?.count ?? 0})</h2>
-          </header>
-          <div className="events-grid">
-            {(eventsData?.events ?? []).map((event) => (
-              <article className="event-card" key={event.id}>
-                <div className="event-top">
-                  <span
-                    className="color-dot"
-                    style={{ backgroundColor: event.color_hex || "#64748b" }}
+        <aside className="sidebar-column">
+          <section className="panel sidebar-panel">
+            <header className="panel-head">
+              <h2>Widget Menu</h2>
+              <small>Core Controls</small>
+            </header>
+            <div className="hero-controls side-controls">
+              <label>
+                Provider
+                <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+                  <option value="google">Google</option>
+                  <option value="apple">Apple</option>
+                </select>
+              </label>
+              <label>
+                Theme
+                <select
+                  value={settings.theme}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                    void updateSetting("theme", asThemeName(e.target.value));
+                  }}
+                >
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </label>
+              <label>
+                Event Opacity
+                <input
+                  type="range"
+                  min={0}
+                  max={255}
+                  value={settings.event_opacity}
+                  onChange={(e) => {
+                    void updateSetting("event_opacity", Number(e.target.value));
+                  }}
+                />
+              </label>
+              <button onClick={() => void loadEvents()} disabled={eventsLoading}>
+                {eventsLoading ? "Loading..." : "Refresh Events"}
+              </button>
+              <button
+                onClick={() => void loadBriefing()}
+                disabled={briefingLoading || !settings.briefing_enabled}
+              >
+                {briefingLoading ? "Loading..." : "Refresh Briefing"}
+              </button>
+              <button onClick={() => void loadColorState()} disabled={schemaLoading}>
+                {schemaLoading ? "Loading..." : "Reload Color Schema"}
+              </button>
+              <button onClick={() => void onAuthenticateProvider()}>Sync Calendar</button>
+              <button onClick={() => void onLogoutProvider()}>Logout</button>
+            </div>
+
+            {provider === "apple" ? (
+              <div className="apple-auth">
+                <label>
+                  Apple ID
+                  <input
+                    type="text"
+                    value={appleId}
+                    onChange={(e) => setAppleId(e.target.value)}
+                    placeholder="apple id email"
                   />
-                  <h3>{event.summary}</h3>
-                </div>
+                </label>
+                <label>
+                  App Password
+                  <input
+                    type="password"
+                    value={applePassword}
+                    onChange={(e) => setApplePassword(e.target.value)}
+                    placeholder="app specific password"
+                  />
+                </label>
+                <button onClick={() => void onSaveAppleCredentials()}>Save Apple Credentials</button>
+              </div>
+            ) : null}
+
+            <div className="toggle-row">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.briefing_enabled}
+                  onChange={(e) => {
+                    void updateSetting("briefing_enabled", e.target.checked);
+                  }}
+                />
+                Today Briefing
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.briefing_tts_enabled}
+                  onChange={(e) => {
+                    void updateSetting("briefing_tts_enabled", e.target.checked);
+                  }}
+                />
+                Briefing TTS
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.widget_pinned}
+                  onChange={(e) => {
+                    void updateSetting("widget_pinned", e.target.checked);
+                  }}
+                />
+                Widget Pinned
+              </label>
+            </div>
+          </section>
+
+          <section className="panel sidebar-panel">
+            <header className="panel-head">
+              <h2>Natural Input</h2>
+              <div className="row-actions">
+                <button onClick={() => void onCreateFromNatural()} disabled={naturalLoading}>
+                  Create Event
+                </button>
+              </div>
+            </header>
+            <form onSubmit={onParseNatural} className="natural-form">
+              <textarea
+                placeholder="예: 다음 주 화요일 오후 3시에 민지랑 카페 미팅 잡아줘"
+                value={naturalText}
+                onChange={(e) => setNaturalText(e.target.value)}
+              />
+              <button type="submit" disabled={naturalLoading}>
+                {naturalLoading ? "Parsing..." : "Parse"}
+              </button>
+            </form>
+            {naturalResult ? (
+              <div className="result-box">
+                <p>intent: {naturalResult.intent}</p>
+                <p>title: {naturalResult.title}</p>
                 <p>
-                  {formatDateTime(event.start_time)} ~ {formatDateTime(event.end_time)}
+                  time: {naturalResult.start_time ?? "-"} ~ {naturalResult.end_time ?? "-"}
                 </p>
-                {event.description ? <p className="muted">{event.description}</p> : null}
-              </article>
-            ))}
-            {!eventsData?.events?.length ? <p>표시할 일정이 없습니다.</p> : null}
-          </div>
-        </section>
+                <p>all_day: {String(naturalResult.all_day)}</p>
+                <p>confidence: {naturalResult.confidence.toFixed(2)}</p>
+                {naturalResult.note ? <p>note: {naturalResult.note}</p> : null}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="panel sidebar-panel">
+            <header className="panel-head">
+              <h2>AI Color Schema</h2>
+              <small>{schemaRuleCount} rules</small>
+            </header>
+            <div className="schema-entry-card">
+              <p>
+                상세 스키마 편집, 키워드 생성, 전체 이벤트 적용은 전용 설정 페이지에서 진행합니다.
+              </p>
+              <div className="schema-entry-meta">
+                <span>Available colors: {palette.length}</span>
+                <span>{hasEventColorSupport ? "Writable" : "Read-only"}</span>
+              </div>
+              <div className="row-actions">
+                <button onClick={() => void loadColorState()} disabled={schemaLoading}>
+                  {schemaLoading ? "Loading..." : "Refresh Summary"}
+                </button>
+                <Link
+                  className="button-link"
+                  href={`/settings/color-schema?provider=${encodeURIComponent(provider)}`}
+                >
+                  Open Detail Page
+                </Link>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel sidebar-panel">
+            <header className="panel-head">
+              <h2>Today Events ({eventsData?.count ?? 0})</h2>
+            </header>
+            <div className="events-grid compact-events">
+              {(eventsData?.events ?? []).map((event) => (
+                <article className="event-card" key={event.id}>
+                  <div className="event-top">
+                    <span
+                      className="color-dot"
+                      style={{ backgroundColor: event.color_hex || "#64748b" }}
+                    />
+                    <h3>{event.summary}</h3>
+                  </div>
+                  <p>
+                    {formatDateTime(event.start_time)} ~ {formatDateTime(event.end_time)}
+                  </p>
+                  {event.description ? <p className="muted">{event.description}</p> : null}
+                </article>
+              ))}
+              {!eventsData?.events?.length ? <p>표시할 일정이 없습니다.</p> : null}
+            </div>
+          </section>
+        </aside>
       </main>
     </div>
   );
