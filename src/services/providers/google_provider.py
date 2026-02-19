@@ -247,6 +247,7 @@ class GoogleCalendarProvider(CalendarProvider):
         event_args = {
             "id": item.get("id", ""),
             "summary": item.get("summary", "(제목 없음)"),
+            "description": str(item.get("description", "") or "").strip(),
             "start_time": start_time,
             "end_time": end_time,
             "all_day": all_day,

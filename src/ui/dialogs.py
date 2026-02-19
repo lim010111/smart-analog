@@ -8,6 +8,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QWidget,
+    QTextEdit,
+    QFrame,
 )
 from PySide6.QtCore import Qt
 
@@ -321,3 +323,82 @@ class CustomColorSchemaDialog(QDialog):
         schema.save()
         self.ai_service.reload_schema()
         self.accept()
+
+
+class TodayBriefingDialog(QDialog):
+    def __init__(self, briefing_text: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Today Briefing")
+        self.setMinimumSize(440, 280)
+        self.setStyleSheet(
+            _DARK_DIALOG_STYLE
+            + """
+            QFrame#briefingCard {
+                background-color: #1f2128;
+                border: 1px solid #3f4556;
+                border-radius: 10px;
+            }
+            QLabel#briefingTitle {
+                color: #f0f2f7;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            QLabel#briefingHint {
+                color: #9ca3b8;
+                font-size: 11px;
+            }
+            QTextEdit#briefingBody {
+                background-color: #262a35;
+                color: #e9edf8;
+                border: 1px solid #3f4556;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 13px;
+                line-height: 1.45;
+            }
+            QPushButton#closeBtn {
+                background-color: #4f83ff;
+                color: white;
+                font-weight: 700;
+            }
+            QPushButton#closeBtn:hover {
+                background-color: #3f74f5;
+            }
+            """
+        )
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+
+        card = QFrame()
+        card.setObjectName("briefingCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(8)
+
+        title = QLabel("오늘의 브리핑")
+        title.setObjectName("briefingTitle")
+        card_layout.addWidget(title)
+
+        hint = QLabel("현재 시각 이후 일정을 바탕으로 생성된 요약")
+        hint.setObjectName("briefingHint")
+        card_layout.addWidget(hint)
+
+        body = QTextEdit()
+        body.setObjectName("briefingBody")
+        body.setReadOnly(True)
+        body.setText(str(briefing_text).strip() or "표시할 브리핑이 없습니다.")
+        card_layout.addWidget(body, 1)
+
+        root.addWidget(card, 1)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+
+        close_btn = QPushButton("닫기")
+        close_btn.setObjectName("closeBtn")
+        close_btn.clicked.connect(self.accept)
+        button_row.addWidget(close_btn)
+
+        root.addLayout(button_row)

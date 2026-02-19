@@ -7,6 +7,7 @@ from src.models.event import CalendarEvent
 class EventContext:
     event_id: str
     summary: str
+    description: str
     start_time: str
     end_time: str
     all_day: bool
@@ -16,6 +17,7 @@ class EventContext:
         return cls(
             event_id=event.id,
             summary=event.summary,
+            description=event.description,
             start_time=event.start_time.isoformat(),
             end_time=event.end_time.isoformat(),
             all_day=event.all_day,
@@ -25,6 +27,7 @@ class EventContext:
         return {
             "id": self.event_id,
             "summary": self.summary,
+            "description": self.description,
             "start_time": self.start_time,
             "end_time": self.end_time,
             "all_day": self.all_day,

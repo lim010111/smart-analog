@@ -142,10 +142,12 @@ class AppleCalendarProvider(CalendarProvider):
                 dtstart, datetime.time.max, tzinfo=local_tz
             )
             summary = str(vevent.get("SUMMARY", "(제목 없음)"))
+            description = str(vevent.get("DESCRIPTION", "") or "").strip()
             uid = str(vevent.get("UID", summary))
             return CalendarEvent(
                 id=uid,
                 summary=summary,
+                description=description,
                 start_time=start_time,
                 end_time=end_time,
                 color=cal_color,
@@ -167,11 +169,13 @@ class AppleCalendarProvider(CalendarProvider):
             dtend = dtend.replace(tzinfo=datetime.timezone.utc)
 
         summary = str(vevent.get("SUMMARY", "(제목 없음)"))
+        description = str(vevent.get("DESCRIPTION", "") or "").strip()
         uid = str(vevent.get("UID", summary))
 
         return CalendarEvent(
             id=uid,
             summary=summary,
+            description=description,
             start_time=dtstart,
             end_time=dtend,
             color=cal_color,

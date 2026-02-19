@@ -119,6 +119,10 @@ class ClockContextMenu(QMenu):
         briefing_toggle_action.triggered.connect(self.clock.toggle_today_briefing)
         self.addAction(briefing_toggle_action)
 
+        show_briefing_action = QAction("Show Today Briefing", self)
+        show_briefing_action.triggered.connect(self.clock.show_today_briefing_dialog)
+        self.addAction(show_briefing_action)
+
         briefing_tts_action = QAction("Briefing TTS", self)
         briefing_tts_action.setCheckable(True)
         briefing_tts_action.setChecked(self.clock.is_today_briefing_tts_enabled())

@@ -9,6 +9,7 @@ class CalendarEvent:
     summary: str
     start_time: datetime
     end_time: datetime
+    description: str = ""
     color: QColor = field(default_factory=lambda: QColor(100, 150, 255, 180))
     all_day: bool = False
     provider_color_id: str | None = None
