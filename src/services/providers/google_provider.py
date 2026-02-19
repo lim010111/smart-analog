@@ -23,17 +23,17 @@ load_dotenv(env_path)
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 GOOGLE_COLORS = {
-    "1": "#a4bdfc",  # Lavender
-    "2": "#7ae148",  # Sage
-    "3": "#bdadff",  # Grape
-    "4": "#ff887c",  # Flamingo
-    "5": "#fbd75b",  # Banana
-    "6": "#ffb878",  # Tangerine
-    "7": "#46d6db",  # Peacock
-    "8": "#e1e1e1",  # Graphite
-    "9": "#5484ed",  # Blueberry
-    "10": "#51b749",  # Basil
-    "11": "#dc2127",  # Tomato
+    "1": "#a4bdfc",
+    "2": "#7ae148",
+    "3": "#bdadff",
+    "4": "#ff887c",
+    "5": "#fbd75b",
+    "6": "#ffb878",
+    "7": "#46d6db",
+    "8": "#e1e1e1",
+    "9": "#5484ed",
+    "10": "#51b749",
+    "11": "#dc2127",
 }
 
 GOOGLE_COLOR_ORDER = ["11", "4", "6", "5", "2", "10", "7", "9", "1", "3", "8"]
@@ -61,7 +61,7 @@ class GoogleCalendarProvider(CalendarProvider):
     def provider_name(self) -> str:
         return "Google"
 
-    def authenticate(self) -> None:
+    def authenticate(self, interactive: bool = True) -> None:
         if os.path.exists(self.token_path):
             with open(self.token_path, "rb") as token:
                 self.creds = pickle.load(token)
@@ -73,6 +73,11 @@ class GoogleCalendarProvider(CalendarProvider):
             if self.creds and self.creds.expired and self.creds.refresh_token:
                 self.creds.refresh(Request())
             else:
+                if not interactive:
+                    raise ValueError(
+                        "Google provider is not authenticated. "
+                        "Run explicit provider authentication first."
+                    )
                 flow = InstalledAppFlow.from_client_config(CLIENT_CONFIG, SCOPES)
                 self.creds = flow.run_local_server(port=0)
 
@@ -103,7 +108,7 @@ class GoogleCalendarProvider(CalendarProvider):
         page_size: int = 250,
     ) -> list[CalendarEvent]:
         if not self.service:
-            self.authenticate()
+            self.authenticate(interactive=False)
         if not self.service:
             return []
         assert self.service is not None
@@ -167,7 +172,7 @@ class GoogleCalendarProvider(CalendarProvider):
         if not events:
             return 0
         if not self.service:
-            self.authenticate()
+            self.authenticate(interactive=False)
         if not self.service:
             return 0
         assert self.service is not None
@@ -209,7 +214,7 @@ class GoogleCalendarProvider(CalendarProvider):
             return None
 
         if not self.service:
-            self.authenticate()
+            self.authenticate(interactive=False)
         if not self.service:
             return None
         assert self.service is not None
