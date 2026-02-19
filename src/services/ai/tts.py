@@ -96,13 +96,11 @@ class BriefingTTSAdapter:
         try:
             module = importlib.import_module("open" + "ai")
             openai_cls = getattr(module, "OpenAI")
-            from PySide6.QtMultimedia import QSoundEffect
 
             self._openai_client = openai_cls(
                 api_key=self._openai_api_key,
                 timeout=self._openai_timeout,
             )
-            self._openai_sound_effect = QSoundEffect()
             self._active_backend = "openai"
             self._selected_engine_name = (
                 f"openai:{self._openai_model}:{self._openai_voice}"
@@ -267,6 +265,9 @@ class BriefingTTSAdapter:
             self._unavailable_reason = "OpenAI TTS client is not initialized."
             return False
 
+        if not self._ensure_openai_sound_effect():
+            return False
+
         sound_effect = self._openai_sound_effect
         if sound_effect is None:
             self._unavailable_reason = "Qt sound effect backend is unavailable."
@@ -308,6 +309,29 @@ class BriefingTTSAdapter:
             return True
         except Exception as error:
             self._unavailable_reason = f"OpenAI TTS speak failed: {error}"
+            return False
+
+    def _ensure_openai_sound_effect(self) -> bool:
+        if self._openai_sound_effect is not None:
+            return True
+
+        try:
+            from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
+
+            outputs = list(QMediaDevices.audioOutputs())
+            if not outputs:
+                self._unavailable_reason = (
+                    "OpenAI TTS unavailable: no audio output device detected."
+                )
+                return False
+
+            self._openai_sound_effect = QSoundEffect()
+            return True
+        except Exception as error:
+            self._openai_sound_effect = None
+            self._unavailable_reason = (
+                f"Qt sound effect backend initialization failed: {error}"
+            )
             return False
 
     def _track_temp_audio(self, path: Path) -> None:
