@@ -2,7 +2,12 @@ import datetime
 import time
 
 from src.models.event import CalendarEvent
-from src.services.ai import AIEventColorService, AITodayBriefingService
+from src.services.ai import (
+    AIEventColorService,
+    AITodayBriefingService,
+    AINaturalInputService,
+    NaturalInputParseResult,
+)
 from src.services.providers.base import CalendarProvider
 from src.services.providers.google_provider import GoogleCalendarProvider
 from src.services.providers.apple_provider import AppleCalendarProvider
@@ -20,6 +25,7 @@ class CalendarService:
         self._active_provider_key: str | None = None
         self._ai_event_color_service = AIEventColorService()
         self._ai_today_briefing_service = AITodayBriefingService()
+        self._ai_natural_input_service = AINaturalInputService()
 
     @property
     def active_provider(self) -> CalendarProvider | None:
@@ -38,6 +44,10 @@ class CalendarService:
     @property
     def ai_today_briefing_service(self) -> AITodayBriefingService:
         return self._ai_today_briefing_service
+
+    @property
+    def ai_natural_input_service(self) -> AINaturalInputService:
+        return self._ai_natural_input_service
 
     def get_provider(self, key: str) -> CalendarProvider | None:
         return self._providers.get(key)
@@ -138,6 +148,34 @@ class CalendarService:
     def can_write_event_colors(self) -> bool:
         provider = self.active_provider
         return provider.supports_event_color_write() if provider else False
+
+    def can_create_events(self) -> bool:
+        provider = self.active_provider
+        return provider.supports_event_create() if provider else False
+
+    def create_event_from_natural_input(
+        self,
+        parsed: NaturalInputParseResult,
+    ) -> CalendarEvent | None:
+        provider = self.active_provider
+        if not provider:
+            return None
+        if not provider.supports_event_create():
+            return None
+
+        if parsed.intent != "create":
+            return None
+        if not parsed.title.strip():
+            return None
+        if parsed.start_time is None or parsed.end_time is None:
+            return None
+
+        return provider.create_event(
+            summary=parsed.title,
+            start_time=parsed.start_time,
+            end_time=parsed.end_time,
+            all_day=parsed.all_day,
+        )
 
     def _sync_ai_palette_with_provider(self, provider: CalendarProvider) -> None:
         palette = [

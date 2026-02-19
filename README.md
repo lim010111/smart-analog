@@ -18,7 +18,7 @@
 - **항상 위(Always on Top)**: 다른 창보다 항상 위에 표시되도록 설정하여 언제든 시간을 확인할 수 있습니다.
 - **로그인/로그아웃**: 우클릭 메뉴에서 캘린더 프로바이더 전환 및 계정 로그아웃이 가능합니다.
 - **AI 일정 색상 분류 (선택 기능)**: OpenAI API를 사용해 일정 제목을 카테고리로 분류하고 색상을 자동 적용할 수 있습니다.
-- **AI 오늘의 브리핑 (선택 기능)**: 앱 시작 시 오늘 일정 요약을 생성하고, 시계 위 마우스 오버 시 자연어 브리핑을 표시할 수 있습니다.
+- **AI 오늘의 브리핑 (선택 기능)**: 앱 시작 시 오늘 일정 요약을 생성하고, 메뉴에서 스타일 다이얼로그로 확인할 수 있습니다.
 
 ---
 
@@ -101,18 +101,29 @@ OPENAI_COLOR_MODEL=gpt-4o-mini
 
 ### AI Natural Input (feature/ai-natural-input)
 
-자연어 문장을 일정 의도로 파싱하는 초기 서비스 스캐폴딩이 추가되었습니다.
+자연어 문장을 일정 의도로 파싱하고, 프리뷰 확인 후 이벤트를 생성할 수 있습니다.
 
 ```bash
 ENABLE_AI_NATURAL_INPUT=false
 OPENAI_NATURAL_INPUT_MODEL=gpt-4o-mini
 OPENAI_NATURAL_INPUT_TIMEOUT=8
 OPENAI_NATURAL_INPUT_MAX_CHARS=300
+OPENAI_NATURAL_INPUT_DEFAULT_DURATION_MINUTES=60
+OPENAI_NATURAL_INPUT_MIN_CONFIDENCE=0.6
 ```
+
+1. `.env.template`을 `.env`로 복사하고 `ENABLE_AI_NATURAL_INPUT=true`로 변경합니다.
+2. 우클릭 메뉴 > **AI Natural Input** 을 선택합니다.
+3. 한 문장으로 일정을 입력하면 파싱 결과(의도/시간/신뢰도)를 프리뷰로 확인할 수 있습니다.
+4. 프리뷰에서 **Create Event** 를 누르면 활성 프로바이더에 이벤트를 생성합니다.
+
+> [!NOTE]
+> 의도(intent)가 `create`가 아니거나 시작/종료 시간이 부족하면 생성 버튼이 비활성화됩니다.
+> 프로바이더가 이벤트 생성을 지원하지 않으면 프리뷰만 가능합니다.
 
 ### AI Today Briefing (feature/ai-briefing)
 
-앱 시작 시 오늘 일정을 자연어로 요약하고, 시계 위 마우스 오버 시 브리핑 툴팁으로 확인할 수 있습니다.
+앱 시작 시 오늘 일정을 자연어로 요약하고, 메뉴의 **Show Today Briefing**에서 스타일 다이얼로그로 확인할 수 있습니다.
 
 ```bash
 ENABLE_AI_TODAY_BRIEFING=false
@@ -121,6 +132,7 @@ AI_TTS_BACKEND=openai
 OPENAI_BRIEFING_MODEL=gpt-4o-mini
 OPENAI_BRIEFING_TIMEOUT=8
 OPENAI_BRIEFING_MAX_EVENTS=20
+OPENAI_BRIEFING_REFRESH_SLOT_MINUTES=15
 OPENAI_TTS_MODEL=gpt-4o-mini-tts
 OPENAI_TTS_VOICE=marin
 OPENAI_TTS_INSTRUCTIONS=
@@ -213,8 +225,10 @@ clock_widget/
   - **Event Opacity**: 일정 영역의 투명도를 조절합니다.
   - **Calendar Provider**: Google / Apple 캘린더를 선택합니다.
   - **Today Briefing**: 오늘의 AI 브리핑 기능 on/off를 전환합니다.
+  - **Show Today Briefing**: 현재 브리핑을 스타일 다이얼로그로 확인합니다.
   - **Briefing TTS**: 브리핑 음성 읽기 on/off를 전환합니다.
   - **Speak Today Briefing**: 현재 브리핑을 즉시 음성으로 읽습니다.
+  - **AI Natural Input**: 자연어 문장을 파싱하고 프리뷰에서 이벤트 생성 여부를 확인합니다.
   - **Sync Calendar**: 캘린더와 수동으로 동기화합니다.
   - **Refresh Events**: 일정을 새로고침합니다.
   - **Logout**: 현재 캘린더 계정에서 로그아웃합니다.
