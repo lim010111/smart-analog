@@ -113,6 +113,27 @@ class ClockContextMenu(QMenu):
         color_schema_action.triggered.connect(self.clock.open_color_schema)
         self.addAction(color_schema_action)
 
+        briefing_toggle_action = QAction("Today Briefing", self)
+        briefing_toggle_action.setCheckable(True)
+        briefing_toggle_action.setChecked(self.clock.is_today_briefing_enabled())
+        briefing_toggle_action.triggered.connect(self.clock.toggle_today_briefing)
+        self.addAction(briefing_toggle_action)
+
+        briefing_tts_action = QAction("Briefing TTS", self)
+        briefing_tts_action.setCheckable(True)
+        briefing_tts_action.setChecked(self.clock.is_today_briefing_tts_enabled())
+        tts_reason = self.clock.briefing_tts_unavailable_reason().strip()
+        if tts_reason:
+            briefing_tts_action.setToolTip(tts_reason)
+        briefing_tts_action.triggered.connect(self.clock.toggle_today_briefing_tts)
+        self.addAction(briefing_tts_action)
+
+        speak_briefing_action = QAction("Speak Today Briefing", self)
+        if tts_reason:
+            speak_briefing_action.setToolTip(tts_reason)
+        speak_briefing_action.triggered.connect(self.clock.speak_today_briefing)
+        self.addAction(speak_briefing_action)
+
         sync_all_color_action = QAction("Apply AI Colors to All Events", self)
         sync_all_color_action.triggered.connect(
             self.clock.apply_ai_colors_to_all_events

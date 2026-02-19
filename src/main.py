@@ -12,6 +12,7 @@ from src.ui.clock import AnalogClock
 from src.ui.menu import ClockContextMenu
 from src.ui.dialogs import AppleLoginDialog, CustomColorSchemaDialog
 from src.services.calendar import CalendarService
+from src.services.ai import BriefingTTSAdapter
 from src.services.providers.apple_provider import AppleCalendarProvider
 from caldav.lib.error import AuthorizationError
 import src.core.startup as startup
@@ -37,12 +38,35 @@ class BulkColorSyncThread(QThread):
             self.failed.emit(str(e))
 
 
+class TodayBriefingThread(QThread):
+    completed = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, briefing_service, events: list):
+        super().__init__()
+        self.briefing_service = briefing_service
+        self.events = list(events)
+
+    def run(self):
+        try:
+            text = self.briefing_service.generate_today_briefing(self.events)
+            self.completed.emit(text)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 class MainClockWindow(AnalogClock):
     def __init__(self):
         super().__init__()
 
         self.calendar_service = CalendarService()
         self.calendar_service.set_active_provider("google")
+        self._briefing_tts = BriefingTTSAdapter()
+        self._briefing_thread: TodayBriefingThread | None = None
+        self._today_briefing_text = ""
+        self.today_briefing_enabled = (
+            self.calendar_service.ai_today_briefing_service.is_enabled()
+        )
 
         self.setWindowFlags(
             Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
@@ -60,6 +84,7 @@ class MainClockWindow(AnalogClock):
         try:
             if os.path.exists("token.json"):
                 self.refresh_calendar_events()
+            self._trigger_today_briefing_generation(on_startup=True)
         except Exception as e:
             print(f"Initial sync failed: {e}")
 
@@ -115,6 +140,7 @@ class MainClockWindow(AnalogClock):
             new_events = self.calendar_service.get_todays_events()
             self.events = new_events
             self.update()
+            self._trigger_today_briefing_generation(on_startup=False)
         except AuthorizationError:
             self._handle_apple_reauth()
         except Exception as e:
@@ -138,6 +164,99 @@ class MainClockWindow(AnalogClock):
     def show_context_menu(self, pos):
         menu = ClockContextMenu(self)
         menu.exec(self.mapToGlobal(pos))
+
+    def is_today_briefing_enabled(self) -> bool:
+        return self.calendar_service.ai_today_briefing_service.is_enabled()
+
+    def toggle_today_briefing(self) -> None:
+        service = self.calendar_service.ai_today_briefing_service
+        next_state = not service.is_enabled()
+        service.set_enabled(next_state)
+        self.today_briefing_enabled = next_state
+
+        if next_state:
+            self._trigger_today_briefing_generation(on_startup=False, force=True)
+        else:
+            self._today_briefing_text = ""
+            self.clear_today_briefing()
+
+    def is_briefing_tts_available(self) -> bool:
+        return self._briefing_tts.is_available()
+
+    def briefing_tts_unavailable_reason(self) -> str:
+        return self._briefing_tts.unavailable_reason()
+
+    def is_today_briefing_tts_enabled(self) -> bool:
+        return self.calendar_service.ai_today_briefing_service.is_tts_enabled()
+
+    def toggle_today_briefing_tts(self) -> None:
+        service = self.calendar_service.ai_today_briefing_service
+        next_state = not service.is_tts_enabled()
+        service.set_tts_enabled(next_state)
+
+        if next_state and not self._briefing_tts.is_available():
+            reason = self._briefing_tts.unavailable_reason().strip()
+            message = "TTS backend is not ready yet. Briefing text will still work."
+            if reason:
+                message = f"{message}\n\nReason: {reason}"
+            QMessageBox.information(self, "TTS Unavailable", message)
+
+    def speak_today_briefing(self) -> None:
+        if not self._briefing_tts.is_available():
+            reason = self._briefing_tts.unavailable_reason()
+            message = "No TTS backend is available on this system."
+            if reason:
+                message = f"{message}\n\nReason: {reason}"
+            QMessageBox.information(
+                self,
+                "TTS Unavailable",
+                message,
+            )
+            return
+        if not self._today_briefing_text:
+            self._trigger_today_briefing_generation(on_startup=False, force=True)
+            return
+        self._briefing_tts.speak(self._today_briefing_text)
+
+    def _trigger_today_briefing_generation(
+        self,
+        on_startup: bool,
+        force: bool = False,
+    ) -> None:
+        service = self.calendar_service.ai_today_briefing_service
+        if not service.is_enabled():
+            return
+
+        if self._briefing_thread and self._briefing_thread.isRunning():
+            return
+
+        self._briefing_thread = TodayBriefingThread(service, self.events)
+        self._briefing_thread.completed.connect(
+            lambda text: self._on_today_briefing_completed(text, on_startup)
+        )
+        self._briefing_thread.failed.connect(self._on_today_briefing_failed)
+        self._briefing_thread.finished.connect(self._on_today_briefing_finished)
+        self._briefing_thread.start()
+
+    def _on_today_briefing_completed(self, text: str, on_startup: bool) -> None:
+        normalized = str(text).strip()
+        self._today_briefing_text = normalized
+        self.set_today_briefing(normalized)
+
+        service = self.calendar_service.ai_today_briefing_service
+        self.today_briefing_enabled = service.is_enabled()
+
+        if on_startup and normalized:
+            QMessageBox.information(self, "오늘의 브리핑", normalized)
+
+        if on_startup and normalized and service.is_tts_enabled():
+            self._briefing_tts.speak(normalized)
+
+    def _on_today_briefing_failed(self, message: str) -> None:
+        print(f"Today briefing failed: {message}")
+
+    def _on_today_briefing_finished(self) -> None:
+        self._briefing_thread = None
 
     def toggle_always_on_top(self):
         self._always_on_top = not self._always_on_top
