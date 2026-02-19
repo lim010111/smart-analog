@@ -3,7 +3,7 @@ from collections.abc import Iterable
 from PySide6.QtGui import QColor
 
 from src.models.event import CalendarEvent
-from src.services.ai.color_schema import ColorRule, CustomColorSchema
+from src.services.ai.color_schema import CustomColorSchema
 from src.services.ai.core import (
     OpenAIJSONClient,
     load_openai_config,
@@ -182,61 +182,3 @@ class AIEventColorService:
             color = QColor(hex_color)
             color.setAlpha(180)
             event.color = color
-
-    def generate_keywords_for_rules(self, rules: list[ColorRule]) -> list[ColorRule]:
-        if not self._openai_client.is_available() or not rules:
-            return rules
-
-        labels = [rule.label for rule in rules if rule.label.strip()]
-        if not labels:
-            return rules
-
-        prompt = {
-            "categories": labels,
-            "instructions": (
-                "For each category label, generate 5-10 keywords (Korean and English) "
-                "that calendar event titles in that category would typically contain. "
-                "Return strict JSON: "
-                "{'items':[{'label':'...','keywords':['kw1','kw2',...]}]}"
-            ),
-        }
-
-        data = request_json_or_empty(
-            self._openai_client,
-            system_prompt=(
-                "You generate keywords for calendar event categories. "
-                "Keywords should be short, lowercase words or phrases "
-                "that commonly appear in calendar event titles. "
-                "Include both Korean and English keywords. "
-                "Respond with valid JSON only."
-            ),
-            user_payload=prompt,
-            max_output_tokens=1000,
-            model=self.model,
-        )
-        if not data:
-            return rules
-
-        items = data.get("items")
-        if not isinstance(items, list):
-            return rules
-
-        keywords_by_label: dict[str, list[str]] = {}
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            label = str(item.get("label", "")).strip()
-            keywords = item.get("keywords", [])
-            if label and isinstance(keywords, list):
-                keywords_by_label[label] = [
-                    str(kw).strip().lower()
-                    for kw in keywords
-                    if isinstance(kw, str) and kw.strip()
-                ]
-
-        for rule in rules:
-            generated = keywords_by_label.get(rule.label, [])
-            if generated:
-                rule.keywords = generated
-
-        return rules

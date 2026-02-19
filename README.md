@@ -90,8 +90,7 @@ OPENAI_COLOR_MODEL=gpt-4o-mini
 
 3. 우클릭 메뉴 > **Color Schema** 에서 색상-카테고리 규칙을 정의합니다.
    - 선택 가능한 색상은 현재 캘린더 프로바이더가 실제로 저장 가능한 색상만 표시됩니다.
-4. **Generate Keywords** 버튼으로 AI가 각 카테고리에 맞는 키워드를 자동 생성합니다.
-5. 우클릭 메뉴 > **Apply AI Colors to All Events** 로 전체 일정 범위에 색상을 일괄 적용할 수 있습니다.
+4. 우클릭 메뉴 > **Apply AI Colors to All Events** 로 전체 일정 범위에 색상을 일괄 적용할 수 있습니다.
 
 > [!NOTE]
 > 색상 스키마가 설정되지 않으면 색상 분류가 적용되지 않습니다.
