@@ -2,7 +2,7 @@ import math
 import datetime
 from PySide6.QtCore import Qt, QTimer, QTime, QPoint, QPointF, QRect
 from PySide6.QtGui import QPainter, QColor, QPolygon, QBrush, QPen
-from PySide6.QtWidgets import QWidget, QToolTip
+from PySide6.QtWidgets import QWidget
 from src.core.theme import THEMES
 
 
@@ -153,7 +153,6 @@ class AnalogClock(QWidget):
         self.tooltip_window = EventTooltip(self)
         self.today_briefing_enabled = False
         self.today_briefing_text = ""
-        self._briefing_visible = False
 
         # 기본 윈도우 플래그는 관리를 위해 Main에서 처리하도록 위젯 속성만 설정
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -169,7 +168,6 @@ class AnalogClock(QWidget):
     def closeEvent(self, event):
         """윈도우 종료 시 툴팁 윈도우도 함께 닫습니다."""
         self.tooltip_window.close()
-        QToolTip.hideText()
         super().closeEvent(event)
 
     def set_today_briefing(self, text: str) -> None:
@@ -177,8 +175,6 @@ class AnalogClock(QWidget):
 
     def clear_today_briefing(self) -> None:
         self.today_briefing_text = ""
-        self._briefing_visible = False
-        QToolTip.hideText()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -318,17 +314,8 @@ class AnalogClock(QWidget):
         if self.hovered_event:
             global_pos = self.mapToGlobal(self.mouse_pos)
             self.tooltip_window.show_event(self.hovered_event, global_pos)
-            self._briefing_visible = False
-            QToolTip.hideText()
         else:
             self.tooltip_window.hide()
-            if self.today_briefing_enabled and self.today_briefing_text:
-                global_pos = self.mapToGlobal(self.mouse_pos + QPoint(15, 15))
-                QToolTip.showText(global_pos, self.today_briefing_text, self)
-                self._briefing_visible = True
-            elif self._briefing_visible:
-                QToolTip.hideText()
-                self._briefing_visible = False
 
         # 상태가 변했을 때만 다시 그리기 호출
         if (

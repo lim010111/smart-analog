@@ -10,7 +10,11 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from src.ui.clock import AnalogClock
 from src.ui.menu import ClockContextMenu
-from src.ui.dialogs import AppleLoginDialog, CustomColorSchemaDialog
+from src.ui.dialogs import (
+    AppleLoginDialog,
+    CustomColorSchemaDialog,
+    TodayBriefingDialog,
+)
 from src.services.calendar import CalendarService
 from src.services.ai import BriefingTTSAdapter
 from src.services.providers.apple_provider import AppleCalendarProvider
@@ -218,6 +222,40 @@ class MainClockWindow(AnalogClock):
             return
         self._briefing_tts.speak(self._today_briefing_text)
 
+    def show_today_briefing_dialog(self) -> None:
+        service = self.calendar_service.ai_today_briefing_service
+        if not service.is_enabled():
+            QMessageBox.information(
+                self,
+                "Today Briefing Disabled",
+                "'Today Briefing' is turned off. Enable it from the menu first.",
+            )
+            return
+
+        briefing_text = self._today_briefing_text.strip()
+        if not briefing_text:
+            self.setCursor(Qt.WaitCursor)
+            try:
+                briefing_text = service.generate_today_briefing(
+                    self.events,
+                    force=True,
+                ).strip()
+            except Exception as error:
+                QMessageBox.critical(
+                    self,
+                    "Briefing Error",
+                    f"Failed to generate today's briefing:\n{error}",
+                )
+                return
+            finally:
+                self.unsetCursor()
+
+            self._today_briefing_text = briefing_text
+            self.set_today_briefing(briefing_text)
+
+        dialog = TodayBriefingDialog(briefing_text, self)
+        dialog.exec()
+
     def _trigger_today_briefing_generation(
         self,
         on_startup: bool,
@@ -245,9 +283,6 @@ class MainClockWindow(AnalogClock):
 
         service = self.calendar_service.ai_today_briefing_service
         self.today_briefing_enabled = service.is_enabled()
-
-        if on_startup and normalized:
-            QMessageBox.information(self, "오늘의 브리핑", normalized)
 
         if on_startup and normalized and service.is_tts_enabled():
             self._briefing_tts.speak(normalized)
