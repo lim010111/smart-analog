@@ -19,6 +19,10 @@ class AITodayBriefingService:
             "ENABLE_AI_TODAY_BRIEFING_TTS", default=False
         )
         self.max_events = max(1, read_int_env("OPENAI_BRIEFING_MAX_EVENTS", default=20))
+        self._refresh_slot_minutes = max(
+            1,
+            read_int_env("OPENAI_BRIEFING_REFRESH_SLOT_MINUTES", default=15),
+        )
 
         config = load_openai_config(
             model_env="OPENAI_BRIEFING_MODEL",
@@ -37,6 +41,7 @@ class AITodayBriefingService:
 
         self._cached_date: datetime.date | None = None
         self._cached_signature = ""
+        self._cached_slot = ""
         self._cached_text = ""
 
     def is_enabled(self) -> bool:
@@ -61,17 +66,20 @@ class AITodayBriefingService:
     ) -> str:
         local_now = now or datetime.datetime.now().astimezone()
         today = local_now.date()
-        signature = self._build_signature(events)
+        relevant_events = self._select_relevant_events(events, local_now)
+        signature = self._build_signature(relevant_events)
+        slot = self._build_slot_key(local_now)
 
         if (
             not force
             and self._cached_text
             and self._cached_date == today
             and self._cached_signature == signature
+            and self._cached_slot == slot
         ):
             return self._cached_text
 
-        limited_events = self._normalize_events(events)
+        limited_events = self._normalize_events(relevant_events)
 
         text = ""
         if self._client.is_available():
@@ -81,6 +89,7 @@ class AITodayBriefingService:
 
         self._cached_date = today
         self._cached_signature = signature
+        self._cached_slot = slot
         self._cached_text = text
         return text
 
@@ -93,11 +102,14 @@ class AITodayBriefingService:
             "today": now.date().isoformat(),
             "now": now.isoformat(),
             "timezone": str(now.tzinfo) if now.tzinfo else "local",
+            "briefing_scope": "ongoing_and_upcoming_from_now",
             "events": events,
             "schema": {
                 "briefing": (
                     "Korean natural-language summary in 1-2 sentences. "
-                    "Mention notable schedule clusters and free time blocks."
+                    "Focus on ongoing/upcoming plans from now, and include useful "
+                    "detail from event descriptions when available. Mention notable "
+                    "schedule clusters and free time blocks."
                 )
             },
         }
@@ -105,7 +117,10 @@ class AITodayBriefingService:
             self._client,
             system_prompt=(
                 "You are a helpful daily scheduler assistant. "
-                "Generate a concise Korean briefing for today's calendar. "
+                "Generate a concise Korean briefing for the remaining day "
+                "from the current time. "
+                "Prioritize ongoing and upcoming events, and use event "
+                "descriptions to enrich context when helpful. "
                 "Return valid JSON only."
             ),
             user_payload=payload,
@@ -121,9 +136,7 @@ class AITodayBriefingService:
         now: datetime.datetime,
     ) -> str:
         if not events:
-            return (
-                "오늘 등록된 일정이 없습니다. 필요한 일정이 있으면 지금 추가해 두세요."
-            )
+            return "현재 시각 이후로 예정된 일정이 없습니다. 남은 시간을 정리해보세요."
 
         starts: list[datetime.datetime] = []
         for event in events:
@@ -146,9 +159,19 @@ class AITodayBriefingService:
         else:
             gap_phrase = "일정이 비교적 촘촘하게 배치되어 있어요"
 
+        detail_phrase = ""
+        for event in events:
+            detail = str(event.get("description", "") or "").strip()
+            if detail:
+                clipped = detail[:60]
+                if len(detail) > 60:
+                    clipped = f"{clipped}..."
+                detail_phrase = f" 참고로 다음 일정 설명은 '{clipped}' 입니다."
+                break
+
         return (
-            f"오늘은 오전 일정 {morning}개, 오후 일정 {afternoon}개가 있어요. "
-            f"{gap_phrase}."
+            f"남은 일정은 오전 {morning}개, 오후 {afternoon}개입니다. "
+            f"{gap_phrase}.{detail_phrase}"
         )
 
     def _largest_gap_hours(
@@ -187,11 +210,32 @@ class AITodayBriefingService:
 
     def _build_signature(self, events: list[CalendarEvent]) -> str:
         keys = [
-            f"{e.id}|{e.summary}|{e.start_time.isoformat()}|{e.end_time.isoformat()}"
+            (
+                f"{e.id}|{e.summary}|{e.description}|"
+                f"{e.start_time.isoformat()}|{e.end_time.isoformat()}"
+            )
             for e in events
         ]
         keys.sort()
         return "\n".join(keys)
+
+    def _build_slot_key(self, now: datetime.datetime) -> str:
+        slot_start_minute = (
+            now.minute // self._refresh_slot_minutes
+        ) * self._refresh_slot_minutes
+        return f"{now.date().isoformat()}-{now.hour:02d}:{slot_start_minute:02d}"
+
+    def _select_relevant_events(
+        self,
+        events: list[CalendarEvent],
+        now: datetime.datetime,
+    ) -> list[CalendarEvent]:
+        relevant: list[CalendarEvent] = []
+        for event in events:
+            if event.end_time >= now:
+                relevant.append(event)
+        relevant.sort(key=lambda e: e.start_time)
+        return relevant
 
     def _normalize_events(
         self,
@@ -202,6 +246,7 @@ class AITodayBriefingService:
             normalized.append(
                 {
                     "summary": event.summary,
+                    "description": event.description,
                     "start_time": event.start_time.isoformat(),
                     "end_time": event.end_time.isoformat(),
                     "all_day": event.all_day,
