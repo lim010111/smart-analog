@@ -227,6 +227,7 @@ clock_widget/
   - **Today Briefing**: 오늘의 AI 브리핑 기능 on/off를 전환합니다.
   - **Show Today Briefing**: 현재 브리핑을 스타일 다이얼로그로 확인합니다.
   - **Briefing TTS**: 브리핑 음성 읽기 on/off를 전환합니다.
+  - **Show Today Briefing**: 현재 브리핑을 스타일 다이얼로그로 확인합니다.
   - **Speak Today Briefing**: 현재 브리핑을 즉시 음성으로 읽습니다.
   - **AI Natural Input**: 자연어 문장을 파싱하고 프리뷰에서 이벤트 생성 여부를 확인합니다.
   - **Sync Calendar**: 캘린더와 수동으로 동기화합니다.
@@ -234,3 +235,26 @@ clock_widget/
   - **Logout**: 현재 캘린더 계정에서 로그아웃합니다.
   - **Exit**: 위젯을 종료합니다.
 - **종료**: 시계 우측 상단의 닫기(X) 버튼을 클릭하면 앱이 종료됩니다.
+
+---
+
+## Web Service (Next.js + FastAPI)
+
+웹 버전 마이그레이션 브랜치에서는 아래 두 서비스를 함께 실행합니다.
+
+### 1) FastAPI backend
+
+```bash
+uv pip install -r web/backend/requirements.txt
+uv run uvicorn web.backend.app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 2) Next.js frontend
+
+```bash
+cd web/frontend
+npm install
+BACKEND_URL=http://localhost:8000 npm run dev
+```
+
+브라우저에서 `http://localhost:3000` 접속 시 `/api/briefing/today` 결과를 카드 UI로 확인할 수 있습니다.
