@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import src.compat.qt_stub  # noqa: F401 - PySide6 headless stubs
+
 import base64
 import datetime as dt
 import importlib
@@ -414,7 +416,14 @@ def create_event(
                 detail=f"제공자 '{provider}'는 일정 생성을 지원하지 않습니다.",
             )
 
-        created = calendar.active_provider.create_event(
+        active_provider = calendar.active_provider
+        if active_provider is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"제공자 '{provider}'가 활성화되지 않았습니다.",
+            )
+
+        created = active_provider.create_event(
             summary=request.summary,
             start_time=start_time,
             end_time=end_time,
