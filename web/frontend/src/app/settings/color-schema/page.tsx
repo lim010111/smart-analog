@@ -193,7 +193,7 @@ export default function ColorSchemaSettingsPage() {
       <main className="settings-shell">
         <section className="panel settings-panel">
           <header className="panel-head">
-            <h2>AI 색상 스키마 설정</h2>
+          <h2>일정 색상 설정</h2>
             <Link className="button-link" href="/">
               시계로 돌아가기
             </Link>

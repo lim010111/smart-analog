@@ -902,14 +902,14 @@ export default function Home() {
             <header className="panel-head" onClick={() => togglePanel('controls')} style={{ cursor: 'pointer', userSelect: 'none' }}>
               <div>
                 <h2>설정</h2>
-                <small>위젯 구성</small>
               </div>
-              <span style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
-                {expandedPanels['controls'] ? '▲' : '▼'}
+              <span className={`chevron ${expandedPanels['controls'] ? 'expanded' : ''}`} style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
+                ▼
               </span>
             </header>
-            {expandedPanels['controls'] && (
-              <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
+            <div className={`collapsible-wrapper ${expandedPanels['controls'] ? 'expanded' : ''}`}>
+              <div className="collapsible-inner">
+                <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
                 <div className="hero-controls side-controls">
               <label>
                 캘린더 제공자
@@ -1015,21 +1015,23 @@ export default function Home() {
                 위젯 고정
               </label>
             </div>
+                </div>
               </div>
-            )}
+            </div>
           </section>
 
           <section className="panel sidebar-panel">
             <header className="panel-head" onClick={() => togglePanel('natural')} style={{ cursor: 'pointer', userSelect: 'none' }}>
               <div>
-                <h2>자연어 입력</h2>
+                <h2>일정 추가하기</h2>
               </div>
-              <span style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
-                {expandedPanels['natural'] ? '▲' : '▼'}
+              <span className={`chevron ${expandedPanels['natural'] ? 'expanded' : ''}`} style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
+                ▼
               </span>
             </header>
-            {expandedPanels['natural'] && (
-              <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
+            <div className={`collapsible-wrapper ${expandedPanels['natural'] ? 'expanded' : ''}`}>
+              <div className="collapsible-inner">
+                <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
@@ -1038,7 +1040,7 @@ export default function Home() {
                   className="natural-form"
                 >
               <textarea
-                placeholder="예: 다음 주 화요일 오후 3시에 민지랑 커피 약속 잡아줘"
+                placeholder="예: 다음 주 화요일 오후 3시에 친구랑 커피 약속 잡아줘"
                 value={naturalText}
                 onChange={(e) => setNaturalText(e.target.value)}
               />
@@ -1046,22 +1048,23 @@ export default function Home() {
                 {naturalLoading ? "생성 중..." : "일정 생성"}
               </button>
             </form>
+                </div>
               </div>
-            )}
+            </div>
           </section>
 
           <section className="panel sidebar-panel">
             <header className="panel-head" onClick={() => togglePanel('theme')} style={{ cursor: 'pointer', userSelect: 'none' }}>
               <div>
-                <h2>AI 색상 스키마</h2>
-                <small>활성 규칙 {schemaRules.length}개</small>
+                <h2>일정 색상 설정</h2>
               </div>
-              <span style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
-                {expandedPanels['theme'] ? '▲' : '▼'}
+              <span className={`chevron ${expandedPanels['theme'] ? 'expanded' : ''}`} style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
+                ▼
               </span>
             </header>
-            {expandedPanels['theme'] && (
-              <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
+            <div className={`collapsible-wrapper ${expandedPanels['theme'] ? 'expanded' : ''}`}>
+              <div className="collapsible-inner">
+                <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
                 <div className="schema-entry-card" style={{ padding: '0', border: 'none', background: 'transparent', boxShadow: 'none' }}>
                   <div className="row-actions" style={{ marginBottom: '12px' }}>
                     <button onClick={addRule} disabled={schemaLoading || schemaSaving || !hasEventColorSupport}>
@@ -1127,40 +1130,11 @@ export default function Home() {
                     {!schemaRules.length && <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>규칙이 없습니다.</p>}
                   </div>
                 </div>
+                </div>
               </div>
-            )}
+            </div>
           </section>
 
-          <section className="panel sidebar-panel">
-            <header className="panel-head" onClick={() => togglePanel('agenda')} style={{ cursor: 'pointer', userSelect: 'none' }}>
-              <h2>오늘 일정 ({eventsData?.count ?? 0})</h2>
-              <span style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
-                {expandedPanels['agenda'] ? '▲' : '▼'}
-              </span>
-            </header>
-            {expandedPanels['agenda'] && (
-              <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
-                <div className="events-grid compact-events">
-              {(eventsData?.events ?? []).map((event) => (
-                <article className="event-card" key={event.id}>
-                  <div className="event-top">
-                    <span
-                      className="color-dot"
-                      style={{ backgroundColor: event.color_hex || "#64748b" }}
-                    />
-                    <h3>{event.summary}</h3>
-                  </div>
-                  <p>
-                    {formatDateTime(event.start_time)} ~ {formatDateTime(event.end_time)}
-                  </p>
-                  {event.description && <p className="muted">{event.description}</p>}
-                </article>
-              ))}
-              {!eventsData?.events?.length && <p>오늘 남은 일정이 없습니다.</p>}
-            </div>
-              </div>
-            )}
-          </section>
         </aside>
       </main>
     </div>
