@@ -21,7 +21,7 @@ class AIEventColorService:
         openai_config = load_openai_config(
             model_env="OPENAI_COLOR_MODEL",
             timeout_env="OPENAI_COLOR_TIMEOUT",
-            default_model="gpt-4o-mini",
+            default_model="gpt-5-nano",
             default_timeout=8.0,
         )
         self._openai_client = OpenAIJSONClient(openai_config)
@@ -106,9 +106,10 @@ class AIEventColorService:
                 self._custom_schema.to_category_colors().keys()
             ),
             "instructions": (
-                "Classify each title into one category. "
-                "If no category fits, use 'unmatched'. "
-                "Return strict JSON with this shape: "
+                "Classify each title into exactly one category from allowed_categories. "
+                "Use 'unmatched' when no category clearly fits. "
+                "Do not invent categories. "
+                "Return strict JSON only with shape: "
                 "{'items':[{'title':'...','category':'...'}]}"
             ),
         }
@@ -116,10 +117,14 @@ class AIEventColorService:
         data = request_json_or_empty(
             self._openai_client,
             system_prompt=(
-                "You classify calendar event titles. "
-                "Use only allowed_categories. "
-                "If uncertain, use 'unmatched'. "
-                "Respond with valid JSON only."
+                "Task: classify Korean/English calendar event titles for color mapping. "
+                "Rules: "
+                "1) Use only values in allowed_categories. "
+                "2) Choose one category per input title. "
+                "3) Preserve the exact input title text in output. "
+                "4) If uncertain, ambiguous, or multi-topic, pick 'unmatched'. "
+                "5) Never output text outside JSON. "
+                "Output JSON object only: {'items':[{'title':str,'category':str}]}."
             ),
             user_payload=prompt,
             max_output_tokens=500,

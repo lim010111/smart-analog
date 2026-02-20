@@ -98,7 +98,7 @@ class AINaturalInputService:
         config = load_openai_config(
             model_env="OPENAI_NATURAL_INPUT_MODEL",
             timeout_env="OPENAI_NATURAL_INPUT_TIMEOUT",
-            default_model="gpt-4o-mini",
+            default_model="gpt-5-mini",
             default_timeout=8.0,
         )
         self._client = OpenAIJSONClient(config)
@@ -135,15 +135,27 @@ class AINaturalInputService:
                 "all_day": "boolean",
                 "confidence": "0.0-1.0",
             },
+            "rules": {
+                "timezone": "Interpret relative dates/times in the provided local timezone.",
+                "intent_policy": "If required fields are missing or ambiguous, choose 'unknown'.",
+                "title_policy": "Prefer concise but specific title; preserve companion/person context.",
+                "timed_default": "If start exists but end is missing, infer end using default duration.",
+                "all_day_policy": "For all-day intent, use all_day=true and date-based bounds.",
+            },
         }
 
         data = request_json_or_empty(
             self._client,
             system_prompt=(
-                "Extract calendar intent from user text. "
-                "Return valid JSON only and follow the provided schema exactly. "
-                "Make title concise but specific. If a person/companion is mentioned, "
-                "include it in the title when useful (e.g., '민지랑 데이트')."
+                "Task: extract calendar creation intent from Korean/English user text. "
+                "Return JSON only and follow the schema exactly. "
+                "Rules: "
+                "1) intent must be 'create' or 'unknown'. "
+                "2) If date/time is unclear for reliable creation, set intent='unknown'. "
+                "3) Keep title concise but specific; preserve person/companion context when present. "
+                "4) Use ISO-8601 datetimes with timezone when available; otherwise null. "
+                "5) Set confidence in [0.0, 1.0] reflecting extraction certainty. "
+                "6) Do not add any keys beyond schema fields."
             ),
             user_payload=payload,
             max_output_tokens=700,
