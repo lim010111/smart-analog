@@ -119,14 +119,16 @@ def _normalize_theme(value: str) -> str:
 def _require_provider_credentials(calendar: CalendarService) -> None:
     provider = calendar.active_provider
     if provider is None:
-        raise HTTPException(status_code=400, detail="No active provider selected.")
+        raise HTTPException(
+            status_code=400, detail="활성화된 캘린더 제공자가 없습니다."
+        )
 
     if isinstance(provider, GoogleCalendarProvider):
         token_path = str(getattr(provider, "token_path", "token.json"))
         if not os.path.exists(token_path):
             raise HTTPException(
                 status_code=401,
-                detail="Google provider is not authenticated. Use Sync Calendar first.",
+                detail="Google 캘린더 인증이 필요합니다. 먼저 캘린더 인증을 진행해주세요.",
             )
 
     if (
@@ -135,7 +137,7 @@ def _require_provider_credentials(calendar: CalendarService) -> None:
     ):
         raise HTTPException(
             status_code=401,
-            detail="Apple credentials are missing. Save Apple credentials first.",
+            detail="Apple 자격증명이 없습니다. 먼저 Apple 자격증명을 저장해주세요.",
         )
 
 
@@ -147,7 +149,7 @@ def _allowed_origins() -> list[str]:
 def _parse_iso_datetime(value: str) -> dt.datetime:
     text = str(value).strip()
     if not text:
-        raise ValueError("datetime value is required")
+        raise ValueError("날짜/시간 값이 필요합니다.")
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
     parsed = dt.datetime.fromisoformat(text)
@@ -185,7 +187,7 @@ def _synthesize_openai_tts(payload: BriefingTTSRequest) -> tuple[bytes, str]:
     if not api_key:
         raise HTTPException(
             status_code=400,
-            detail="OPENAI_API_KEY is missing.",
+            detail="OPENAI_API_KEY가 설정되지 않았습니다.",
         )
 
     fmt = _normalize_response_format(payload.response_format)
@@ -209,7 +211,7 @@ def _synthesize_openai_tts(payload: BriefingTTSRequest) -> tuple[bytes, str]:
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"OpenAI client initialization failed: {error}",
+            detail=f"OpenAI 클라이언트 초기화에 실패했습니다: {error}",
         ) from error
 
     tmp_dir = Path(tempfile.gettempdir()) / "clock_widget_web_tts"
@@ -233,14 +235,16 @@ def _synthesize_openai_tts(payload: BriefingTTSRequest) -> tuple[bytes, str]:
 
         audio_bytes = tmp_path.read_bytes()
         if not audio_bytes:
-            raise HTTPException(status_code=500, detail="Generated TTS audio is empty.")
+            raise HTTPException(
+                status_code=500, detail="생성된 TTS 오디오가 비어 있습니다."
+            )
         return (audio_bytes, fmt)
     except HTTPException:
         raise
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"OpenAI TTS generation failed: {error}",
+            detail=f"OpenAI TTS 생성에 실패했습니다: {error}",
         ) from error
     finally:
         try:
@@ -249,7 +253,7 @@ def _synthesize_openai_tts(payload: BriefingTTSRequest) -> tuple[bytes, str]:
             pass
 
 
-app = FastAPI(title="Clock Widget Web API", version="0.2.0")
+app = FastAPI(title="Clock Widget 웹 API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
@@ -269,6 +273,28 @@ def providers() -> dict[str, object]:
     return {
         "default_provider": os.getenv("WEB_DEFAULT_PROVIDER", "google"),
         "providers": ["google", "apple"],
+    }
+
+
+@app.get("/api/providers/status")
+def provider_status(
+    provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
+) -> dict[str, object]:
+    try:
+        calendar = _build_calendar_service(provider)
+        active = calendar.active_provider
+        if isinstance(active, GoogleCalendarProvider):
+            token_path = str(getattr(active, "token_path", "token.json"))
+            authenticated = os.path.exists(token_path)
+        elif isinstance(active, AppleCalendarProvider):
+            authenticated = active.has_saved_credentials()
+        else:
+            authenticated = False
+    except Exception:
+        authenticated = False
+    return {
+        "provider": provider,
+        "authenticated": authenticated,
     }
 
 
@@ -293,7 +319,9 @@ def set_apple_credentials(request: AppleCredentialsRequest) -> dict[str, object]
         calendar = _build_calendar_service("apple")
         provider = calendar.active_provider
         if not isinstance(provider, AppleCalendarProvider):
-            raise HTTPException(status_code=500, detail="Apple provider is not active.")
+            raise HTTPException(
+                status_code=500, detail="Apple 제공자가 활성화되어 있지 않습니다."
+            )
         provider.set_credentials(request.apple_id, request.app_password)
         provider.authenticate()
         return {
@@ -383,7 +411,7 @@ def create_event(
         if not calendar.can_create_events():
             raise HTTPException(
                 status_code=400,
-                detail=f"Provider '{provider}' does not support event creation.",
+                detail=f"제공자 '{provider}'는 일정 생성을 지원하지 않습니다.",
             )
 
         created = calendar.active_provider.create_event(
@@ -393,7 +421,7 @@ def create_event(
             all_day=request.all_day,
         )
         if not created:
-            raise HTTPException(status_code=500, detail="Event creation failed.")
+            raise HTTPException(status_code=500, detail="일정 생성에 실패했습니다.")
 
         return {
             "provider": provider,
@@ -468,7 +496,9 @@ def create_event_from_natural_input(
 
         parsed = parser.parse(request.text)
         if not parsed:
-            raise HTTPException(status_code=400, detail="Natural input parse failed.")
+            raise HTTPException(
+                status_code=400, detail="자연어 입력 파싱에 실패했습니다."
+            )
 
         created = calendar.create_event_from_natural_input(parsed)
         if not created:
@@ -558,7 +588,7 @@ def today_briefing(
 def briefing_tts(request: BriefingTTSRequest) -> Response:
     if not bool(WEB_SETTINGS["briefing_tts_enabled"]):
         raise HTTPException(
-            status_code=400, detail="Briefing TTS is disabled in settings."
+            status_code=400, detail="설정에서 브리핑 TTS가 비활성화되어 있습니다."
         )
     audio_bytes, fmt = _synthesize_openai_tts(request)
     return Response(
@@ -572,7 +602,7 @@ def briefing_tts(request: BriefingTTSRequest) -> Response:
 def briefing_tts_base64(request: BriefingTTSRequest) -> dict[str, str]:
     if not bool(WEB_SETTINGS["briefing_tts_enabled"]):
         raise HTTPException(
-            status_code=400, detail="Briefing TTS is disabled in settings."
+            status_code=400, detail="설정에서 브리핑 TTS가 비활성화되어 있습니다."
         )
     audio_bytes, fmt = _synthesize_openai_tts(request)
     encoded = base64.b64encode(audio_bytes).decode("ascii")
@@ -679,7 +709,7 @@ def apply_colors_all(
         if not calendar.can_write_event_colors():
             raise HTTPException(
                 status_code=400,
-                detail=f"Provider '{provider}' does not support writing event colors.",
+                detail=f"제공자 '{provider}'는 일정 색상 쓰기를 지원하지 않습니다.",
             )
 
         total, updated = calendar.sync_ai_colors_for_all_events(

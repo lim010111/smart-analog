@@ -43,7 +43,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("Request timed out. Please authenticate provider and try again.");
+      throw new Error("요청 시간이 초과되었습니다. 캘린더 인증 후 다시 시도해주세요.");
     }
     throw error;
   } finally {
@@ -130,7 +130,7 @@ export default function ColorSchemaSettingsPage() {
       });
       setMessage("색상 스키마를 저장했습니다.");
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
+      const text = error instanceof Error ? error.message : "알 수 없는 오류";
       setMessage(text);
     } finally {
       setLoading(false);
@@ -147,7 +147,7 @@ export default function ColorSchemaSettingsPage() {
       );
       setMessage(`AI 색상 적용 완료: 처리 ${result.processed}, 업데이트 ${result.updated}`);
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
+      const text = error instanceof Error ? error.message : "알 수 없는 오류";
       setMessage(text);
     } finally {
       setLoading(false);
@@ -193,36 +193,36 @@ export default function ColorSchemaSettingsPage() {
       <main className="settings-shell">
         <section className="panel settings-panel">
           <header className="panel-head">
-            <h2>AI Color Schema Settings</h2>
+            <h2>AI 색상 스키마 설정</h2>
             <Link className="button-link" href="/">
-              Back to Clock
+              시계로 돌아가기
             </Link>
           </header>
 
           <div className="settings-toolbar">
             <label>
-              Provider
+              캘린더 제공자
               <select value={provider} onChange={(e) => onProviderChange(e.target.value)}>
                 <option value="google">Google</option>
                 <option value="apple">Apple</option>
               </select>
             </label>
             <button onClick={() => void loadColorState()} disabled={loading}>
-              {loading ? "Loading..." : "Reload"}
+              {loading ? "불러오는 중..." : "다시 불러오기"}
             </button>
             <button onClick={addRule} disabled={loading || !hasEventColorSupport}>
-              Add Rule
+              규칙 추가
             </button>
             <button onClick={() => void onSaveSchema()} disabled={loading}>
-              Save Schema
+              스키마 저장
             </button>
             <button onClick={() => void onApplyAllColors()} disabled={loading || !hasEventColorSupport}>
-              Apply to All Events
+              전체 일정에 적용
             </button>
           </div>
 
           <p className="settings-hint">
-            Palette colors: {palette.length} · Rules: {schemaRules.length}
+            팔레트 색상: {palette.length}개 · 규칙: {schemaRules.length}개
           </p>
           {message ? <p className="notice">{message}</p> : null}
 
@@ -237,7 +237,7 @@ export default function ColorSchemaSettingsPage() {
                       setOpenPaletteIndex((prev) => (prev === index ? null : index))
                     }
                     aria-expanded={openPaletteIndex === index}
-                    aria-label="Open color palette"
+                    aria-label="색상 팔레트 열기"
                   >
                     <span
                       className="color-preview"
@@ -255,7 +255,7 @@ export default function ColorSchemaSettingsPage() {
                             type="button"
                             className={`color-choice ${selected ? "selected" : ""}`}
                             style={{ backgroundColor: color }}
-                            aria-label={`Select ${color}`}
+                            aria-label={`${color} 선택`}
                             title={color}
                             onClick={() => {
                               updateRule(index, (prev) => ({ ...prev, color_hex: color }));
@@ -270,7 +270,7 @@ export default function ColorSchemaSettingsPage() {
                 <input
                   className="schema-label-input"
                   value={rule.label}
-                  placeholder="Category label"
+                  placeholder="카테고리 라벨"
                   onChange={(e) =>
                     updateRule(index, (prev) => ({ ...prev, label: e.target.value }))
                   }
@@ -278,7 +278,7 @@ export default function ColorSchemaSettingsPage() {
                 <input
                   className="schema-keyword-input"
                   value={rule.keywords.join(", ")}
-                  placeholder="keyword1, keyword2"
+                  placeholder="키워드1, 키워드2"
                   onChange={(e) =>
                     updateRule(index, (prev) => ({
                       ...prev,
@@ -293,8 +293,8 @@ export default function ColorSchemaSettingsPage() {
                   type="button"
                   className="schema-remove-btn"
                   onClick={() => removeRule(index)}
-                  aria-label="Remove rule"
-                  title="Remove"
+                  aria-label="규칙 삭제"
+                  title="삭제"
                 >
                   ×
                 </button>

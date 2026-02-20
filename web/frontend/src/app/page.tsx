@@ -1,272 +1,149 @@
 "use client";
 
-import {
-  ChangeEvent,
-  FormEvent,
-  MouseEvent as ReactMouseEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, type ChangeEvent } from "react";
 import Link from "next/link";
+import "./globals.css";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? process.env.BACKEND_URL ?? "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
-const CLOCK_SIZE = 460;
-const REQUEST_TIMEOUT_MS = 15000;
+const CLOCK_SIZE = 800; // Large size for sharpness
 
+// ... Types ...
 type ThemeName = "dark" | "light";
 
-type WebEvent = {
+interface WebSettings {
+  theme: ThemeName;
+  event_opacity: number;
+  briefing_enabled: boolean;
+  briefing_tts_enabled: boolean;
+  widget_pinned: boolean; // Add this line
+}
+
+interface WebEvent {
   id: string;
   summary: string;
   description: string;
   start_time: string;
   end_time: string;
   all_day: boolean;
-  color_hex: string;
-  provider_color_id: string | null;
-};
+  color_hex?: string;
+}
 
-type EventResponse = {
+interface EventResponse {
   provider: string;
-  date: string;
   count: number;
   events: WebEvent[];
-};
+}
 
-type BriefingResponse = {
+interface BriefingResponse {
   provider: string;
   generated_at: string;
   briefing: string;
   event_count: number;
   disabled?: boolean;
-};
+}
 
-type NaturalParseResult = {
-  intent: string;
-  title: string;
-  start_time: string | null;
-  end_time: string | null;
-  all_day: boolean;
-  confidence: number;
-  note: string | null;
-};
-
-type ColorRule = {
+interface ColorRule {
   color_hex: string;
   label: string;
   keywords: string[];
-};
+}
 
-type WebSettings = {
-  theme: ThemeName;
-  event_opacity: number;
-  briefing_enabled: boolean;
-  briefing_tts_enabled: boolean;
-  widget_pinned: boolean;
-};
+interface NaturalParseResult {
+  intent: string;
+  title?: string;
+  start_time?: string;
+  end_time?: string;
+  all_day: boolean;
+  confidence: number;
+  note?: string;
+}
+
+interface NaturalParseResponse {
+  provider: string;
+  ready: boolean;
+  reason?: string;
+  result: NaturalParseResult | null;
+}
+
+interface NaturalCreateResponse {
+  provider: string;
+  parsed: NaturalParseResult;
+  created: WebEvent | null;
+}
+
+interface HoverInfo {
+  event: WebEvent;
+  x: number;
+  y: number;
+}
 
 const defaultSettings: WebSettings = {
   theme: "dark",
   event_opacity: 150,
   briefing_enabled: true,
-  briefing_tts_enabled: false,
-  widget_pinned: true,
+  briefing_tts_enabled: true,
+  widget_pinned: false,
 };
 
-function extractErrorDetail(raw: string): string | null {
-  if (!raw) {
-    return null;
-  }
-  try {
-    const body = JSON.parse(raw) as { detail?: string };
-    return typeof body?.detail === "string" ? body.detail : null;
-  } catch {
-    return null;
-  }
+function asThemeName(val: string | undefined | null): ThemeName {
+  return val === "light" ? "light" : "dark";
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => {
-    controller.abort();
-  }, REQUEST_TIMEOUT_MS);
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("Request timed out. Please authenticate provider and try again.");
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
+  const headers = new Headers(init?.headers);
+  if (init?.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
 
-  if (!response.ok) {
-    let message = `Request failed (${response.status})`;
-    const raw = await response.text();
-    const detail = extractErrorDetail(raw);
-    if (detail) {
-      message = detail;
-    }
-    throw new Error(message);
+  const res = await fetch(url, {
+    ...init,
+    headers,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API 오류: ${res.status} ${text}`);
   }
-
-  return (await response.json()) as T;
+  return res.json() as Promise<T>;
 }
 
-function formatDateTime(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
+function parseEventDate(value: string): Date {
+  // If it's effectively an outline date (YYYY-MM-DD), let's parse it as local time
+  // to avoid timezone offset issues (where it might shift to the previous day)
+  if (value.length === 10) {
+    return new Date(`${value}T00:00:00`);
   }
-  return parsed.toLocaleString("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return new Date(value);
 }
 
 function formatEventRange(event: WebEvent): string {
   if (event.all_day) {
     return "종일";
   }
-  const start = new Date(event.start_time);
-  const end = new Date(event.end_time);
-  return `${start.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false })} - ${end.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+  const s = new Date(event.start_time).toLocaleTimeString("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const e = new Date(event.end_time).toLocaleTimeString("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${s} - ${e}`;
 }
 
-function asThemeName(value: string): ThemeName {
-  return value === "light" ? "light" : "dark";
-}
-
-function parseEventDate(value: string): Date {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+function formatDateTime(isoStr?: string): string {
+  if (!isoStr) return "";
+  const d = new Date(isoStr);
+  return d.toLocaleString("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function minutesBetween(start: Date, end: Date): number {
-  return Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
-}
-
-function pointToAngleDeg(relX: number, relY: number): number {
-  let deg = (Math.atan2(-relY, relX) * 180) / Math.PI;
-  if (deg < 0) {
-    deg += 360;
-  }
-  return deg;
-}
-
-function withinClockwiseRange(angle: number, start: number, end: number): boolean {
-  if (end < start) {
-    return angle >= end && angle <= start;
-  }
-  return angle >= end || angle <= start;
-}
-
-type HoverInfo = {
-  event: WebEvent;
-  x: number;
-  y: number;
-};
-
-function detectHoveredEvent(
-  events: WebEvent[],
-  mouseX: number,
-  mouseY: number,
-  size: number,
-  now: Date,
-): WebEvent | null {
-  if (!events.length) {
-    return null;
-  }
-
-  const center = size / 2;
-  const relX = mouseX - center;
-  const relY = mouseY - center;
-  const dist = Math.sqrt(relX * relX + relY * relY);
-  const scale = (size - 12) / 200;
-  const scaledDist = dist / scale;
-  const inPieRegion = scaledDist >= 15 && scaledDist <= 88;
-  const inArcRegion = scaledDist >= 90 && scaledDist <= 97;
-  const angleDeg = pointToAngleDeg(relX, relY);
-  const currentIsAm = now.getHours() < 12;
-
-  if (scaledDist >= 95) {
-    const scaledX = relX / scale;
-    const scaledY = relY / scale;
-    const allDayEvents = events.filter((event) => event.all_day);
-    const spacing = 10;
-    const totalWidth = (allDayEvents.length - 1) * spacing;
-
-    for (let index = 0; index < allDayEvents.length; index += 1) {
-      const dotX = -totalWidth / 2 + index * spacing;
-      const dotY = -103;
-      const dx = scaledX - dotX;
-      const dy = scaledY - dotY;
-      if (Math.sqrt(dx * dx + dy * dy) <= 5.5) {
-        return allDayEvents[index];
-      }
-    }
-  }
-
-  if (!inPieRegion && !inArcRegion) {
-    return null;
-  }
-
-  for (const event of events) {
-    if (event.all_day) {
-      continue;
-    }
-    const evStart = parseEventDate(event.start_time);
-    const evEnd = parseEventDate(event.end_time);
-    if (now > evEnd) {
-      continue;
-    }
-
-    const isInProgress = evStart <= now && now <= evEnd;
-    const isCurrentCycle = isInProgress || currentIsAm === (evStart.getHours() < 12);
-    if (isCurrentCycle && !inPieRegion) {
-      continue;
-    }
-    if (!isCurrentCycle && !inArcRegion) {
-      continue;
-    }
-
-    const startHour = (evStart.getHours() % 12) + evStart.getMinutes() / 60;
-    let startAngle = 90 - startHour * 30;
-    let spanAngle = -(Math.min(12 * 60, minutesBetween(evStart, evEnd)) / (12 * 60)) * 360;
-
-    if (isInProgress) {
-      const nowHour = (now.getHours() % 12) + now.getMinutes() / 60 + now.getSeconds() / 3600;
-      startAngle = 90 - nowHour * 30;
-      const remainingHours = Math.min(12, Math.max(0, (evEnd.getTime() - now.getTime()) / 3600000));
-      spanAngle = -(remainingHours * 30);
-    }
-
-    const s = ((startAngle % 360) + 360) % 360;
-    const e = (((startAngle + spanAngle) % 360) + 360) % 360;
-
-    if (withinClockwiseRange(angleDeg, s, e)) {
-      return event;
-    }
-  }
-
-  return null;
+  return Math.max(0, (end.getTime() - start.getTime()) / 60000);
 }
 
 function drawClock(
@@ -288,25 +165,26 @@ function drawClock(
   const pieRadius = 88 * scale;
   const arcRadius = 94 * scale;
 
+  // Enhance clock colors to match the new dark/light palette
   const palette =
     theme === "dark"
       ? {
-          face: "#131620",
-          border: "#4a5267",
-          tick: "#d9def0",
-          hand: "#f4f7ff",
-          number: "#f4f7ff",
-          second: "#ff7a7a",
-          backdrop: "#0d111c",
+          face: "rgba(18, 24, 38, 0.4)", // transparent face matching bg-card
+          border: "rgba(143, 166, 214, 0.2)",
+          tick: "#cbd5e1",
+          hand: "#f8fafc",
+          number: "#f8fafc",
+          second: "#ef4444",
+          backdrop: "transparent",
         }
       : {
-          face: "#f8fafc",
-          border: "#7d8aa5",
-          tick: "#1f2937",
-          hand: "#111827",
-          number: "#111827",
-          second: "#d7263d",
-          backdrop: "#dde3ee",
+          face: "rgba(255, 255, 255, 0.6)",
+          border: "rgba(148, 163, 184, 0.3)",
+          tick: "#334155",
+          hand: "#0f172a",
+          number: "#0f172a",
+          second: "#dc2626",
+          backdrop: "transparent",
         };
 
   context.clearRect(0, 0, size, size);
@@ -319,7 +197,7 @@ function drawClock(
   context.beginPath();
   context.fillStyle = palette.face;
   context.strokeStyle = palette.border;
-  context.lineWidth = 2;
+  context.lineWidth = 1.5;
   context.arc(0, 0, faceRadius, 0, Math.PI * 2);
   context.fill();
   context.stroke();
@@ -364,8 +242,8 @@ function drawClock(
       spanAngle = -(remainingHours * 30);
     }
 
-    const startRad = ((90 - startAngle) * Math.PI) / 180;
-    const endRad = ((90 - (startAngle + spanAngle)) * Math.PI) / 180;
+    const startRad = (-startAngle * Math.PI) / 180;
+    const endRad = (-(startAngle + spanAngle) * Math.PI) / 180;
     const color = event.color_hex || "#64748b";
     const alphaBase = Math.max(0.15, Math.min(1, eventOpacity / 255));
 
@@ -489,16 +367,64 @@ export default function Home() {
   const [clockNow, setClockNow] = useState<Date>(new Date());
 
   const [naturalText, setNaturalText] = useState("");
-  const [naturalResult, setNaturalResult] = useState<NaturalParseResult | null>(null);
+  const [, setNaturalResult] = useState<NaturalParseResult | null>(null);
   const [naturalLoading, setNaturalLoading] = useState(false);
+
+  const [providerAuthenticated, setProviderAuthenticated] = useState(false);
 
   const [appleId, setAppleId] = useState("");
   const [applePassword, setApplePassword] = useState("");
 
   const [palette, setPalette] = useState<string[]>([]);
-  const [schemaRuleCount, setSchemaRuleCount] = useState(0);
+  const [schemaRules, setSchemaRules] = useState<ColorRule[]>([]);
   const [schemaLoading, setSchemaLoading] = useState(false);
+  const [schemaSaving, setSchemaSaving] = useState(false);
+  const [openPaletteIndex, setOpenPaletteIndex] = useState<number | null>(null);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
+
+  const [expandedPanels, setExpandedPanels] = useState<Record<string, boolean>>({
+    theme: true,
+  });
+
+  const togglePanel = (panel: string) => {
+    setExpandedPanels((prev) => ({ ...prev, [panel]: !prev[panel] }));
+  };
+
+  const addRule = () => {
+    const fallbackColor = palette[0] ?? "#a4bdfc";
+    setSchemaRules((prev) => [...prev, { color_hex: fallbackColor, label: "", keywords: [] }]);
+  };
+
+  const updateRule = (index: number, updater: (rule: ColorRule) => ColorRule) => {
+    setSchemaRules((prev) => prev.map((rule, idx) => (idx === index ? updater(rule) : rule)));
+  };
+
+  const removeRule = (index: number) => {
+    setSchemaRules((prev) => prev.filter((_, idx) => idx !== index));
+    setOpenPaletteIndex((prev) => {
+      if (prev === null) return prev;
+      if (prev === index) return null;
+      if (prev > index) return prev - 1;
+      return prev;
+    });
+  };
+
+  const onSaveSchema = async () => {
+    setSchemaSaving(true);
+    setMessage("");
+    try {
+      await fetchJson(`${API_BASE_URL}/api/colors/schema?provider=${provider}`, {
+        method: "PUT",
+        body: JSON.stringify({ rules: schemaRules }),
+      });
+      setMessage("색상 스키마를 저장했습니다.");
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "알 수 없는 오류";
+      setMessage(text);
+    } finally {
+      setSchemaSaving(false);
+    }
+  };
 
   const clockRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -536,6 +462,17 @@ export default function Home() {
     },
     [],
   );
+
+  const loadAuthStatus = useCallback(async () => {
+    try {
+      const data = await fetchJson<{ authenticated: boolean }>(
+        `${API_BASE_URL}/api/providers/status?provider=${provider}`,
+      );
+      setProviderAuthenticated(data.authenticated);
+    } catch {
+      setProviderAuthenticated(false);
+    }
+  }, [provider]);
 
   const loadEvents = useCallback(async () => {
     setEventsLoading(true);
@@ -582,7 +519,7 @@ export default function Home() {
       const schemaData = await fetchJson<{ rules: ColorRule[] }>(
         `${API_BASE_URL}/api/colors/schema?provider=${provider}`,
       );
-      setSchemaRuleCount((schemaData.rules ?? []).length);
+      setSchemaRules(schemaData.rules ?? []);
     } finally {
       setSchemaLoading(false);
     }
@@ -599,140 +536,119 @@ export default function Home() {
     const run = async () => {
       setMessage("");
       try {
-        await Promise.all([loadSettings(), loadEvents(), loadColorState()]);
-      } catch (error) {
-        const text = error instanceof Error ? error.message : "Unknown error";
-        setMessage(text);
+        await loadSettings();
+        await loadAuthStatus();
+        await loadColorState();
+        await loadEvents();
+        await loadBriefing();
+      } catch (err: unknown) {
+        if (err instanceof Error) {
+          setMessage(`초기화 실패: ${err.message}`);
+        } else {
+          setMessage("초기화 실패");
+        }
       }
     };
     void run();
-  }, [loadColorState, loadEvents, loadSettings]);
+  }, [loadSettings, loadAuthStatus, loadColorState, loadEvents, loadBriefing]);
 
   useEffect(() => {
-    void loadBriefing();
-  }, [loadBriefing]);
+    const interval = window.setInterval(() => {
+      void loadEvents();
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(interval);
+  }, [loadEvents]);
 
   useEffect(() => {
-    if (!clockRef.current) {
-      return;
-    }
-    drawClock(
-      clockRef.current,
-      eventsData?.events ?? [],
-      clockNow,
-      settings.theme,
-      settings.event_opacity,
-    );
-  }, [clockNow, eventsData?.events, settings.event_opacity, settings.theme]);
+    if (!clockRef.current || !eventsData) return;
+    const canvas = clockRef.current;
+    let animationFrameId: number;
+    const renderLoop = () => {
+      drawClock(canvas, eventsData.events, new Date(), settings.theme, settings.event_opacity);
+      animationFrameId = requestAnimationFrame(renderLoop);
+    };
+    renderLoop();
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [eventsData, settings.theme, settings.event_opacity]);
 
-  const onSpeakBriefing = async () => {
-    if (!settings.briefing_tts_enabled) {
-      setMessage("Briefing TTS가 비활성화되어 있습니다.");
-      return;
-    }
-    if (!briefingData?.briefing?.trim()) {
-      setMessage("브리핑 텍스트가 없습니다.");
-      return;
-    }
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (!target.closest(".color-picker-cell")) {
+        setOpenPaletteIndex(null);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, []);
 
+  const updateSetting = async (key: keyof WebSettings, val: number | string | boolean) => {
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE_URL}/api/briefing/tts`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ text: briefingData.briefing, response_format: "wav" }),
-      });
-      if (!response.ok) {
-        throw new Error(`TTS failed (${response.status})`);
+      if (key === "theme" || key === "briefing_enabled" || key === "briefing_tts_enabled" || key === "widget_pinned") {
+        const nextSettings: WebSettings = {
+          ...settings,
+          [key]: val,
+        };
+        await saveSettings(nextSettings);
+        return;
       }
-
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.onended = () => URL.revokeObjectURL(url);
-      await audio.play();
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
-    }
-  };
-
-  const onParseNatural = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!naturalText.trim()) {
-      setMessage("자연어 입력 문장을 작성해주세요.");
-      return;
-    }
-
-    setNaturalLoading(true);
-    setMessage("");
-    try {
-      const data = await fetchJson<{ ready: boolean; reason?: string; result: NaturalParseResult | null }>(
-        `${API_BASE_URL}/api/events/natural-input/parse?provider=${provider}`,
-        {
-          method: "POST",
-          body: JSON.stringify({ text: naturalText }),
-        },
-      );
-
-      if (!data.ready) {
-        throw new Error(data.reason || "AI natural input is not ready.");
+      if (key === "event_opacity") {
+        setSettings((prev) => ({ ...prev, event_opacity: val as number }));
+        await saveSettings({ ...settings, event_opacity: val as number });
       }
-      setNaturalResult(data.result);
-    } catch (error) {
-      setNaturalResult(null);
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
-    } finally {
-      setNaturalLoading(false);
-    }
-  };
-
-  const onCreateFromNatural = async () => {
-    if (!naturalText.trim()) {
-      setMessage("먼저 자연어 문장을 입력하세요.");
-      return;
-    }
-
-    setNaturalLoading(true);
-    setMessage("");
-    try {
-      const data = await fetchJson<{ created: WebEvent | null; parsed: NaturalParseResult }>(
-        `${API_BASE_URL}/api/events/natural-input/create?provider=${provider}`,
-        {
-          method: "POST",
-          body: JSON.stringify({ text: naturalText }),
-        },
-      );
-
-      setNaturalResult(data.parsed);
-      if (data.created) {
-        setMessage(`일정이 생성되었습니다: ${data.created.summary}`);
-        await Promise.all([loadEvents(), loadBriefing()]);
-      } else {
-        setMessage("파싱은 되었지만 생성 조건을 만족하지 않아 이벤트를 만들지 못했습니다.");
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setMessage(`설정 변경 실패: ${err.message}`);
       }
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
-    } finally {
-      setNaturalLoading(false);
     }
   };
 
   const onAuthenticateProvider = async () => {
     setMessage("");
     try {
-      await fetchJson(`${API_BASE_URL}/api/providers/authenticate?provider=${provider}`, {
+      if (provider === "google") {
+        const data = await fetchJson<{ authenticated: boolean }>(
+          `${API_BASE_URL}/api/providers/authenticate?provider=${provider}`,
+          { method: "POST" },
+        );
+        if (data.authenticated) {
+          setProviderAuthenticated(true);
+          await loadEvents();
+          await loadBriefing();
+          setMessage("Google 캘린더 인증을 완료했습니다.");
+        }
+      } else if (provider === "apple") {
+        setMessage("아래 Apple ID/앱 비밀번호를 입력해주세요.");
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setMessage(`인증 오류: ${err.message}`);
+      }
+    }
+  };
+
+  const onSaveAppleCredentials = async () => {
+    setMessage("Apple 인증 정보를 저장하는 중...");
+    try {
+      await fetchJson(`${API_BASE_URL}/api/providers/apple/credentials`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apple_id: appleId, app_password: applePassword }),
       });
-      await Promise.all([loadEvents(), loadBriefing()]);
-      setMessage(`${provider} 인증을 완료했습니다.`);
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
+      setMessage("Apple 인증 정보를 저장했습니다.");
+      setAppleId("");
+      setApplePassword("");
+      setProviderAuthenticated(true);
+      await loadEvents();
+      await loadBriefing();
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setMessage(`저장 실패: ${err.message}`);
+      }
     }
   };
 
@@ -742,65 +658,170 @@ export default function Home() {
       await fetchJson(`${API_BASE_URL}/api/providers/logout?provider=${provider}`, {
         method: "POST",
       });
+      setMessage(`${provider}에서 로그아웃했습니다.`);
+      setProviderAuthenticated(false);
       setEventsData(null);
       setBriefingData(null);
-      setMessage(`${provider} 로그아웃 완료`);
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setMessage(`로그아웃 실패: ${err.message}`);
+      }
     }
   };
 
-  const onSaveAppleCredentials = async () => {
-    if (!appleId.trim() || !applePassword.trim()) {
-      setMessage("Apple ID와 App Password를 입력해주세요.");
-      return;
-    }
-
+  const onSpeakBriefing = async () => {
+    if (!briefingData?.briefing) return;
     setMessage("");
     try {
-      await fetchJson(`${API_BASE_URL}/api/providers/apple/credentials`, {
+      const res = await fetch(`${API_BASE_URL}/api/briefing/tts`, {
         method: "POST",
-        body: JSON.stringify({
-          apple_id: appleId,
-          app_password: applePassword,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: briefingData.briefing, response_format: "wav" }),
       });
-      setMessage("Apple 인증 정보 저장 및 인증 완료");
-      setApplePassword("");
-      await Promise.all([loadEvents(), loadBriefing()]);
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
-    }
-  };
-
-  const updateSetting = async <K extends keyof WebSettings>(key: K, value: WebSettings[K]) => {
-    const next = { ...settings, [key]: value };
-    setSettings(next);
-    try {
-      await saveSettings(next);
-      if (key === "briefing_enabled") {
-        await loadBriefing();
+      if (!res.ok) {
+        const raw = await res.text();
+        try {
+          const parsed = JSON.parse(raw) as { detail?: string };
+          throw new Error(parsed.detail || raw);
+        } catch {
+          throw new Error(raw);
+        }
       }
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
-      setMessage(text);
-      await loadSettings();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      void audio.play();
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setMessage(`TTS 오류: ${err.message}`);
+      }
     }
   };
 
-  const handleClockMouseMove = (event: ReactMouseEvent<HTMLDivElement>) => {
-    const container = event.currentTarget;
-    const rect = container.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    const hovered = detectHoveredEvent(eventsData?.events ?? [], x, y, CLOCK_SIZE, clockNow);
+  const onCreateFromNatural = async () => {
+    if (!naturalText.trim()) {
+      setMessage("먼저 자연어 문장을 입력해주세요.");
+      return;
+    }
+    setNaturalLoading(true);
+    setNaturalResult(null);
+    setMessage("");
+    try {
+      const parsedData = await fetchJson<NaturalParseResponse>(
+        `${API_BASE_URL}/api/events/natural-input/parse?provider=${provider}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: naturalText }),
+        },
+      );
+      if (!parsedData.ready) {
+        setMessage(parsedData.reason || "자연어 입력 기능을 사용할 수 없습니다.");
+        return;
+      }
+      if (!parsedData.result) {
+        setMessage("입력 문장에서 일정 정보를 찾지 못했습니다.");
+        return;
+      }
+      setNaturalResult(parsedData.result);
+
+      const data = await fetchJson<NaturalCreateResponse>(
+        `${API_BASE_URL}/api/events/natural-input/create?provider=${provider}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: naturalText }),
+        },
+      );
+      setNaturalResult(data.parsed);
+      if (data.created) {
+        setMessage("일정을 생성했습니다.");
+        await loadEvents();
+        await loadBriefing();
+      } else {
+        setMessage("일정 생성 조건이 충족되지 않아 생성되지 않았습니다.");
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setMessage(`일정 생성 오류: ${err.message}`);
+      }
+    } finally {
+      setNaturalLoading(false);
+    }
+  };
+
+  const handleClockMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!clockRef.current || !eventsData?.events) return;
+    const canvas = clockRef.current;
+    const rect = canvas.getBoundingClientRect();
+
+    // Scale coordinates if displayed size != internal resolution
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    // Center coordinates
+    const x = (e.clientX - rect.left) * scaleX - canvas.width / 2;
+    const y = (e.clientY - rect.top) * scaleY - canvas.height / 2;
+
+    const distance = Math.sqrt(x * x + y * y);
+
+    const scale = (canvas.width - 12) / 200;
+    const pieRadius = 88 * scale;
+    const arcRadius = 94 * scale;
+    const clickTolerance = 15;
+
+    let hovered: WebEvent | null = null;
+    let minDiff = Infinity;
+    const now = new Date();
+    const currentIsAm = now.getHours() < 12;
+
+    for (const event of eventsData.events) {
+      if (event.all_day) continue;
+
+      const evStart = parseEventDate(event.start_time);
+      const evEnd = parseEventDate(event.end_time);
+
+      if (now > evEnd) continue;
+
+      const isInProgress = evStart <= now && now <= evEnd;
+      const isCurrentCycle = isInProgress || currentIsAm === (evStart.getHours() < 12);
+
+      let targetRadius = pieRadius;
+      if (!isCurrentCycle) {
+        targetRadius = arcRadius;
+      }
+      if (Math.abs(distance - targetRadius) > clickTolerance && !isInProgress) {
+        if (!isCurrentCycle) continue;
+      }
+
+      let startAngle = 90 - ((evStart.getHours() % 12) + evStart.getMinutes() / 60) * 30;
+      let spanAngle = -(Math.min(12 * 60, minutesBetween(evStart, evEnd)) / (12 * 60)) * 360;
+
+      if (isInProgress) {
+        startAngle = 90 - ((now.getHours() % 12) + now.getMinutes() / 60 + now.getSeconds() / 3600) * 30;
+        const remainingHours = Math.min(12, Math.max(0, (evEnd.getTime() - now.getTime()) / 3600000));
+        spanAngle = -(remainingHours * 30);
+      }
+
+      const pointAngle = (Math.atan2(-y, x) * 180) / Math.PI;
+      let diff = startAngle - pointAngle;
+      while (diff < 0) diff += 360;
+      while (diff >= 360) diff -= 360;
+
+      const absSpan = Math.abs(spanAngle);
+
+      if (diff <= absSpan && diff < minDiff) {
+        minDiff = diff;
+        hovered = event;
+      }
+    }
+
     if (!hovered) {
       setHoverInfo(null);
       return;
     }
-    setHoverInfo({ event: hovered, x, y });
+    setHoverInfo({ event: hovered, x: e.clientX - rect.left, y: e.clientY - rect.top });
   };
 
   const handleClockMouseLeave = () => {
@@ -808,114 +829,109 @@ export default function Home() {
   };
 
   const rootClass = settings.theme === "light" ? "theme-light" : "theme-dark";
-  const previewEvents = useMemo(() => (eventsData?.events ?? []).slice(0, 4), [eventsData?.events]);
 
   return (
     <div className={`page-shell ${rootClass}`}>
       <div className="page-backdrop" />
       <main className="clock-shell">
-        <section className={`panel clock-main-panel ${settings.widget_pinned ? "pinned" : ""}`}>
-          <div className="hero-header">
-            <p className="eyebrow">Clock Widget Web Full Service</p>
-            <h1>실시간 시계를 중심으로 일정과 AI 기능을 한 화면에서 관리</h1>
-          </div>
-          {message ? <p className="notice">{message}</p> : null}
+        <div className="main-content-column" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          <section className={`panel clock-main-panel ${settings.widget_pinned ? "pinned" : ""}`}>
+            <div className="hero-header">
+              <p className="eyebrow">Smart Analog</p>
+              <h1>하루 일정을 시계 위에서 직관적으로 확인하세요.</h1>
+            </div>
+            {message && <p className="notice">{message}</p>}
 
-          <header className="panel-head clock-main-head">
-            <h2>Analog Clock</h2>
-            <small>{clockNow.toLocaleTimeString("ko-KR")}</small>
-          </header>
+            <header className="panel-head clock-main-head">
+              <small>{clockNow.toLocaleTimeString("ko-KR")}</small>
+            </header>
 
-          <div className="clock-wrapper" onMouseMove={handleClockMouseMove} onMouseLeave={handleClockMouseLeave}>
-            <canvas ref={clockRef} width={CLOCK_SIZE} height={CLOCK_SIZE} className="clock-canvas" />
-            {hoverInfo ? (
-              <div
-                className="event-tooltip"
-                style={{
-                  left: `${Math.min(CLOCK_SIZE - 210, hoverInfo.x + 12)}px`,
-                  top: `${Math.min(CLOCK_SIZE - 90, hoverInfo.y + 12)}px`,
-                }}
-              >
-                <strong>{hoverInfo.event.summary}</strong>
-                <span>{formatEventRange(hoverInfo.event)}</span>
-              </div>
-            ) : null}
-          </div>
+            <div className="clock-wrapper" onMouseMove={handleClockMouseMove} onMouseLeave={handleClockMouseLeave}>
+              <canvas ref={clockRef} width={CLOCK_SIZE} height={CLOCK_SIZE} className="clock-canvas" />
+              {hoverInfo && (
+                <div
+                  className="event-tooltip"
+                  style={{
+                    left: `${Math.min(CLOCK_SIZE - 210, hoverInfo.x + 12)}px`,
+                    top: `${Math.min(CLOCK_SIZE - 90, hoverInfo.y + 12)}px`,
+                  }}
+                >
+                  <div className="event-tooltip-title-row">
+                    <span className="color-dot" style={{ backgroundColor: hoverInfo.event.color_hex || "#64748b" }} />
+                    <strong>{hoverInfo.event.summary}</strong>
+                  </div>
+                  <span>{formatEventRange(hoverInfo.event)}</span>
+                </div>
+              )}
+            </div>
+          </section>
 
-          <div className="clock-meta-grid">
-            <article className="briefing-card">
+          <div className="clock-meta-grid" style={{ marginTop: '0' }}>
+            <section className="panel briefing-panel" style={{ flex: 1 }}>
               <header className="panel-head">
-                <h2>Today Briefing</h2>
+                <h2>오늘의 브리핑</h2>
                 <button
                   onClick={() => void onSpeakBriefing()}
                   disabled={!settings.briefing_tts_enabled || !briefingData?.briefing}
                 >
-                  Speak Briefing
+                  {settings.briefing_tts_enabled ? "읽어주기" : "TTS 꺼짐"}
                 </button>
               </header>
-              {briefingData?.disabled ? (
-                <p>브리핑이 비활성화되어 있습니다. 사이드바에서 Today Briefing을 켜주세요.</p>
-              ) : briefingData ? (
-                <>
-                  <p>{briefingData.briefing || "표시할 브리핑이 없습니다."}</p>
-                  <small>
-                    events: {briefingData.event_count} · generated: {formatDateTime(briefingData.generated_at)}
-                  </small>
-                </>
-              ) : (
-                <p>브리핑 데이터를 로딩 중입니다.</p>
-              )}
-            </article>
-
-            <article className="briefing-card">
-              <header className="panel-head">
-                <h2>Upcoming Snapshot</h2>
-                <small>{eventsData?.count ?? 0} events</small>
-              </header>
-              <div className="snapshot-list">
-                {previewEvents.map((event) => (
-                  <div className="snapshot-item" key={event.id}>
-                    <span className="color-dot" style={{ backgroundColor: event.color_hex || "#64748b" }} />
-                    <div>
-                      <strong>{event.summary}</strong>
-                      <p>{formatEventRange(event)}</p>
-                    </div>
-                  </div>
-                ))}
-                {!previewEvents.length ? <p>표시할 일정이 없습니다.</p> : null}
+              
+              <div className="panel-content">
+                {briefingData?.disabled ? (
+                  <p>브리핑이 비활성화되어 있습니다. 사이드바에서 켜주세요.</p>
+                ) : briefingData ? (
+                  <>
+                    <p>{briefingData.briefing || "표시할 브리핑이 없습니다."}</p>
+                    <small style={{ color: "var(--muted)", marginTop: "8px", display: "inline-block" }}>
+                      일정: {briefingData.event_count} · 생성: {formatDateTime(briefingData.generated_at)}
+                    </small>
+                  </>
+                ) : (
+                  <p>브리핑 데이터를 불러오는 중...</p>
+                )}
               </div>
-            </article>
+            </section>
+
           </div>
-        </section>
+        </div>
 
         <aside className="sidebar-column">
           <section className="panel sidebar-panel">
-            <header className="panel-head">
-              <h2>Widget Menu</h2>
-              <small>Core Controls</small>
+            <header className="panel-head" onClick={() => togglePanel('controls')} style={{ cursor: 'pointer', userSelect: 'none' }}>
+              <div>
+                <h2>설정</h2>
+                <small>위젯 구성</small>
+              </div>
+              <span style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
+                {expandedPanels['controls'] ? '▲' : '▼'}
+              </span>
             </header>
-            <div className="hero-controls side-controls">
+            {expandedPanels['controls'] && (
+              <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
+                <div className="hero-controls side-controls">
               <label>
-                Provider
+                캘린더 제공자
                 <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-                  <option value="google">Google</option>
-                  <option value="apple">Apple</option>
+                  <option value="google">Google 캘린더</option>
+                  <option value="apple">Apple 캘린더</option>
                 </select>
               </label>
               <label>
-                Theme
+                테마
                 <select
                   value={settings.theme}
                   onChange={(e: ChangeEvent<HTMLSelectElement>) => {
                     void updateSetting("theme", asThemeName(e.target.value));
                   }}
                 >
-                  <option value="dark">Dark</option>
-                  <option value="light">Light</option>
+                  <option value="dark">다크 모드</option>
+                  <option value="light">라이트 모드</option>
                 </select>
               </label>
               <label>
-                Event Opacity
+                일정 투명도 ({settings.event_opacity})
                 <input
                   type="range"
                   min={0}
@@ -926,23 +942,24 @@ export default function Home() {
                   }}
                 />
               </label>
-              <button onClick={() => void loadEvents()} disabled={eventsLoading}>
-                {eventsLoading ? "Loading..." : "Refresh Events"}
-              </button>
+
               <button
                 onClick={() => void loadBriefing()}
                 disabled={briefingLoading || !settings.briefing_enabled}
               >
-                {briefingLoading ? "Loading..." : "Refresh Briefing"}
+                {briefingLoading ? "생성 중..." : "브리핑 생성"}
               </button>
               <button onClick={() => void loadColorState()} disabled={schemaLoading}>
-                {schemaLoading ? "Loading..." : "Reload Color Schema"}
+                {schemaLoading ? "동기화 중..." : "색상 스키마 동기화"}
               </button>
-              <button onClick={() => void onAuthenticateProvider()}>Sync Calendar</button>
-              <button onClick={() => void onLogoutProvider()}>Logout</button>
+              {providerAuthenticated ? (
+                <button onClick={() => void onLogoutProvider()}>계정 연결 해제</button>
+              ) : (
+                <button onClick={() => void onAuthenticateProvider()}>캘린더 인증</button>
+              )}
             </div>
 
-            {provider === "apple" ? (
+            {provider === "apple" && !providerAuthenticated ? (
               <div className="apple-auth">
                 <label>
                   Apple ID
@@ -950,19 +967,19 @@ export default function Home() {
                     type="text"
                     value={appleId}
                     onChange={(e) => setAppleId(e.target.value)}
-                    placeholder="apple id email"
+                    placeholder="이메일(@icloud.com)"
                   />
                 </label>
                 <label>
-                  App Password
+                  앱 전용 비밀번호
                   <input
                     type="password"
                     value={applePassword}
                     onChange={(e) => setApplePassword(e.target.value)}
-                    placeholder="app specific password"
+                    placeholder="xxxx-xxxx-xxxx-xxxx"
                   />
                 </label>
-                <button onClick={() => void onSaveAppleCredentials()}>Save Apple Credentials</button>
+                <button onClick={() => void onSaveAppleCredentials()}>자격증명 저장</button>
               </div>
             ) : null}
 
@@ -975,7 +992,7 @@ export default function Home() {
                     void updateSetting("briefing_enabled", e.target.checked);
                   }}
                 />
-                Today Briefing
+                AI 브리핑 사용
               </label>
               <label>
                 <input
@@ -985,7 +1002,7 @@ export default function Home() {
                     void updateSetting("briefing_tts_enabled", e.target.checked);
                   }}
                 />
-                Briefing TTS
+                음성 읽기(TTS) 사용
               </label>
               <label>
                 <input
@@ -995,76 +1012,135 @@ export default function Home() {
                     void updateSetting("widget_pinned", e.target.checked);
                   }}
                 />
-                Widget Pinned
+                위젯 고정
               </label>
             </div>
+              </div>
+            )}
           </section>
 
           <section className="panel sidebar-panel">
-            <header className="panel-head">
-              <h2>Natural Input</h2>
-              <div className="row-actions">
-                <button onClick={() => void onCreateFromNatural()} disabled={naturalLoading}>
-                  Create Event
-                </button>
+            <header className="panel-head" onClick={() => togglePanel('natural')} style={{ cursor: 'pointer', userSelect: 'none' }}>
+              <div>
+                <h2>자연어 입력</h2>
               </div>
+              <span style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
+                {expandedPanels['natural'] ? '▲' : '▼'}
+              </span>
             </header>
-            <form onSubmit={onParseNatural} className="natural-form">
+            {expandedPanels['natural'] && (
+              <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void onCreateFromNatural();
+                  }}
+                  className="natural-form"
+                >
               <textarea
-                placeholder="예: 다음 주 화요일 오후 3시에 민지랑 카페 미팅 잡아줘"
+                placeholder="예: 다음 주 화요일 오후 3시에 민지랑 커피 약속 잡아줘"
                 value={naturalText}
                 onChange={(e) => setNaturalText(e.target.value)}
               />
               <button type="submit" disabled={naturalLoading}>
-                {naturalLoading ? "Parsing..." : "Parse"}
+                {naturalLoading ? "생성 중..." : "일정 생성"}
               </button>
             </form>
-            {naturalResult ? (
-              <div className="result-box">
-                <p>intent: {naturalResult.intent}</p>
-                <p>title: {naturalResult.title}</p>
-                <p>
-                  time: {naturalResult.start_time ?? "-"} ~ {naturalResult.end_time ?? "-"}
-                </p>
-                <p>all_day: {String(naturalResult.all_day)}</p>
-                <p>confidence: {naturalResult.confidence.toFixed(2)}</p>
-                {naturalResult.note ? <p>note: {naturalResult.note}</p> : null}
               </div>
-            ) : null}
+            )}
           </section>
 
           <section className="panel sidebar-panel">
-            <header className="panel-head">
-              <h2>AI Color Schema</h2>
-              <small>{schemaRuleCount} rules</small>
+            <header className="panel-head" onClick={() => togglePanel('theme')} style={{ cursor: 'pointer', userSelect: 'none' }}>
+              <div>
+                <h2>AI 색상 스키마</h2>
+                <small>활성 규칙 {schemaRules.length}개</small>
+              </div>
+              <span style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
+                {expandedPanels['theme'] ? '▲' : '▼'}
+              </span>
             </header>
-            <div className="schema-entry-card">
-              <p>
-                상세 스키마 편집, 키워드 생성, 전체 이벤트 적용은 전용 설정 페이지에서 진행합니다.
-              </p>
-              <div className="schema-entry-meta">
-                <span>Available colors: {palette.length}</span>
-                <span>{hasEventColorSupport ? "Writable" : "Read-only"}</span>
+            {expandedPanels['theme'] && (
+              <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
+                <div className="schema-entry-card" style={{ padding: '0', border: 'none', background: 'transparent', boxShadow: 'none' }}>
+                  <div className="row-actions" style={{ marginBottom: '12px' }}>
+                    <button onClick={addRule} disabled={schemaLoading || schemaSaving || !hasEventColorSupport}>
+                      규칙 추가
+                    </button>
+                    <button onClick={() => void onSaveSchema()} disabled={schemaLoading || schemaSaving}>
+                      {schemaSaving ? "저장 중..." : "저장"}
+                    </button>
+                  </div>
+                  <div className="schema-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {schemaRules.map((rule, index) => (
+                      <div className="schema-item" key={`${rule.color_hex}-${index}`} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '8px', alignItems: 'center', background: 'var(--bg-card)', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                        <div className="color-picker-cell" style={{ position: 'relative' }}>
+                          <button
+                            type="button"
+                            className="color-trigger"
+                            style={{ width: '24px', height: '24px', minWidth: '24px' }}
+                            onClick={() => setOpenPaletteIndex(prev => prev === index ? null : index)}
+                          >
+                            <span className="color-preview" style={{ width: '16px', height: '16px', backgroundColor: rule.color_hex || "#64748b" }} />
+                          </button>
+                          {openPaletteIndex === index && (
+                            <div className="color-choice-grid" style={{ zIndex: 100, width: 'max-content', maxWidth: '200px' }}>
+                              {palette.map((color) => (
+                                <button
+                                  key={`${index}-${color}`}
+                                  type="button"
+                                  className={`color-choice ${color === rule.color_hex ? "selected" : ""}`}
+                                  style={{ backgroundColor: color }}
+                                  onClick={() => { updateRule(index, (p) => ({ ...p, color_hex: color })); setOpenPaletteIndex(null); }}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <input
+                            style={{ fontSize: '0.8rem', padding: '4px 8px' }}
+                            value={rule.label}
+                            placeholder="라벨"
+                            onChange={(e) => updateRule(index, (p) => ({ ...p, label: e.target.value }))}
+                          />
+                          <input
+                            style={{ fontSize: '0.8rem', padding: '4px 8px' }}
+                            value={rule.keywords.join(", ")}
+                            placeholder="키워드1, 키워드2"
+                            onChange={(e) => updateRule(index, (p) => ({
+                              ...p,
+                              keywords: e.target.value.split(",").map(k => k.trim().toLowerCase()).filter(Boolean)
+                            }))}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          className="schema-remove-btn"
+                          style={{ width: '24px', height: '24px', minWidth: '24px', fontSize: '14px' }}
+                          onClick={() => removeRule(index)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                    {!schemaRules.length && <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>규칙이 없습니다.</p>}
+                  </div>
+                </div>
               </div>
-              <div className="row-actions">
-                <button onClick={() => void loadColorState()} disabled={schemaLoading}>
-                  {schemaLoading ? "Loading..." : "Refresh Summary"}
-                </button>
-                <Link
-                  className="button-link"
-                  href={`/settings/color-schema?provider=${encodeURIComponent(provider)}`}
-                >
-                  Open Detail Page
-                </Link>
-              </div>
-            </div>
+            )}
           </section>
 
           <section className="panel sidebar-panel">
-            <header className="panel-head">
-              <h2>Today Events ({eventsData?.count ?? 0})</h2>
+            <header className="panel-head" onClick={() => togglePanel('agenda')} style={{ cursor: 'pointer', userSelect: 'none' }}>
+              <h2>오늘 일정 ({eventsData?.count ?? 0})</h2>
+              <span style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
+                {expandedPanels['agenda'] ? '▲' : '▼'}
+              </span>
             </header>
-            <div className="events-grid compact-events">
+            {expandedPanels['agenda'] && (
+              <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
+                <div className="events-grid compact-events">
               {(eventsData?.events ?? []).map((event) => (
                 <article className="event-card" key={event.id}>
                   <div className="event-top">
@@ -1077,11 +1153,13 @@ export default function Home() {
                   <p>
                     {formatDateTime(event.start_time)} ~ {formatDateTime(event.end_time)}
                   </p>
-                  {event.description ? <p className="muted">{event.description}</p> : null}
+                  {event.description && <p className="muted">{event.description}</p>}
                 </article>
               ))}
-              {!eventsData?.events?.length ? <p>표시할 일정이 없습니다.</p> : null}
+              {!eventsData?.events?.length && <p>오늘 남은 일정이 없습니다.</p>}
             </div>
+              </div>
+            )}
           </section>
         </aside>
       </main>
