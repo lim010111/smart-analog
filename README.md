@@ -254,7 +254,14 @@ uv run uvicorn web.backend.app.main:app --reload --host 0.0.0.0 --port 8000
 ```bash
 cd web/frontend
 npm install
-BACKEND_URL=http://localhost:8000 npm run dev
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm run dev
 ```
 
 브라우저에서 `http://localhost:3000` 접속 시 `/api/briefing/today` 결과를 카드 UI로 확인할 수 있습니다.
+
+### Fly.io 배포 가이드
+
+웹 버전 배포(단일 컨테이너, nginx reverse proxy, `/data` 볼륨 마운트) 절차는 아래 문서를 참고하세요.
+
+- `docs/flyio-deploy-ko.md`
+- 원클릭 점검/배포 스크립트: `scripts/fly-deploy-check.sh`
