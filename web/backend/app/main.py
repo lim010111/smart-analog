@@ -6,21 +6,27 @@ import base64
 import datetime as dt
 import importlib
 import os
+import pickle
 import tempfile
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
+from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel, Field
 
 from src.services.ai.briefing import AITodayBriefingService
 from src.services.ai.color_schema import ColorRule
 from src.services.calendar import CalendarService
 from src.services.providers.apple_provider import AppleCalendarProvider
-from src.services.providers.google_provider import GoogleCalendarProvider
+from src.services.providers.google_provider import (
+    SCOPES as GOOGLE_SCOPES,
+    GoogleCalendarProvider,
+)
 
 
 @dataclass
@@ -85,6 +91,9 @@ WEB_SETTINGS: dict[str, object] = {
     "widget_pinned": True,
 }
 
+GOOGLE_OAUTH_PENDING: dict[str, tuple[str, float]] = {}
+GOOGLE_OAUTH_TTL_SECONDS = 600
+
 
 def _to_web_event(event) -> WebEvent:
     color_name = ""
@@ -146,6 +155,183 @@ def _require_provider_credentials(calendar: CalendarService) -> None:
 def _allowed_origins() -> list[str]:
     raw = os.getenv("WEB_CORS_ORIGINS", "http://localhost:3000")
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+def _cleanup_google_oauth_pending() -> None:
+    now = time.time()
+    expired = [
+        state
+        for state, (_, created_at) in GOOGLE_OAUTH_PENDING.items()
+        if now - created_at > GOOGLE_OAUTH_TTL_SECONDS
+    ]
+    for state in expired:
+        GOOGLE_OAUTH_PENDING.pop(state, None)
+
+
+def _google_client_id() -> str:
+    value = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    if value:
+        return value
+    raise HTTPException(
+        status_code=400, detail="GOOGLE_CLIENT_ID가 설정되지 않았습니다."
+    )
+
+
+def _google_client_secret() -> str:
+    value = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    if value:
+        return value
+    raise HTTPException(
+        status_code=400,
+        detail="GOOGLE_CLIENT_SECRET이 설정되지 않았습니다.",
+    )
+
+
+def _google_project_id() -> str:
+    value = os.getenv("GOOGLE_PROJECT_ID", "").strip()
+    if value:
+        return value
+    return "calendar-analog-clock-web"
+
+
+def _build_google_redirect_uri(request: Request) -> str:
+    explicit = os.getenv("WEB_GOOGLE_REDIRECT_URI", "").strip()
+    if explicit:
+        return explicit
+
+    host = (
+        os.getenv("WEB_PUBLIC_HOST", "").strip()
+        or request.headers.get("x-forwarded-host", "").strip()
+        or request.headers.get("host", "").strip()
+        or request.url.netloc
+    )
+    proto = (
+        os.getenv("WEB_PUBLIC_SCHEME", "").strip()
+        or request.headers.get("x-forwarded-proto", "").strip()
+        or request.url.scheme
+    )
+    if not host:
+        raise HTTPException(
+            status_code=400,
+            detail="공개 호스트를 확인할 수 없습니다. WEB_PUBLIC_HOST를 설정해주세요.",
+        )
+    if proto == "http" and host not in {"localhost", "127.0.0.1"}:
+        proto = "https"
+    host = _normalize_host(host)
+    return f"{proto}://{host}/api/providers/google/callback"
+
+
+def _normalize_host(raw_host: str) -> str:
+    host = str(raw_host or "").strip()
+    if not host:
+        return ""
+
+    # Fly/Load balancer can send Host like "example.com, proxy.internal".
+    host = host.split(",", 1)[0].strip()
+
+    # Strip default ports to avoid strict matching mismatch with Google OAuth
+    if host.startswith("["):
+        # IPv6 host like [2001:db8::1]:443
+        if host.count("]") == 1 and host.endswith("]"):
+            return host
+        if "]:" in host:
+            base, port = host.rsplit(":", 1)
+            if port in {"80", "443"}:
+                return base
+            return host
+        return host
+
+    if ":" in host:
+        base, port = host.rsplit(":", 1)
+        if port in {"80", "443"}:
+            return base
+    return host
+
+
+def _build_public_request_url(request: Request) -> str:
+    host = (
+        os.getenv("WEB_PUBLIC_HOST", "").strip()
+        or request.headers.get("x-forwarded-host", "").strip()
+        or request.headers.get("host", "").strip()
+        or request.url.netloc
+    )
+    proto = (
+        os.getenv("WEB_PUBLIC_SCHEME", "").strip()
+        or request.headers.get("x-forwarded-proto", "").strip()
+        or request.url.scheme
+    )
+    if not host:
+        raise HTTPException(
+            status_code=400,
+            detail="공개 호스트를 확인할 수 없습니다. WEB_PUBLIC_HOST를 설정해주세요.",
+        )
+    host = _normalize_host(host)
+    if proto == "http" and host not in {"localhost", "127.0.0.1"}:
+        proto = "https"
+    path = request.url.path
+    query = request.url.query
+    if query:
+        return f"{proto}://{host}{path}?{query}"
+    return f"{proto}://{host}{path}"
+
+
+def _build_google_web_client_config(redirect_uri: str) -> dict[str, object]:
+    return {
+        "web": {
+            "client_id": _google_client_id(),
+            "project_id": _google_project_id(),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": _google_client_secret(),
+            "redirect_uris": [redirect_uri],
+            "javascript_origins": [],
+        }
+    }
+
+
+def _google_token_path() -> str:
+    provider = GoogleCalendarProvider()
+    return str(getattr(provider, "token_path", "token.json"))
+
+
+def _google_callback_html(success: bool, message: str) -> str:
+    escaped = message.replace("<", "&lt;").replace(">", "&gt;")
+    status = "success" if success else "error"
+    return f"""
+<!doctype html>
+<html lang=\"ko\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>Google 인증 결과</title>
+  <style>
+    body {{ font-family: sans-serif; margin: 0; padding: 24px; background: #f7f8fa; color: #121417; }}
+    .box {{ max-width: 520px; margin: 40px auto; padding: 20px; border-radius: 12px; background: #fff; border: 1px solid #e5e8ef; }}
+    .ok {{ color: #0b7a37; }}
+    .fail {{ color: #c22a2a; }}
+    p {{ line-height: 1.5; }}
+  </style>
+</head>
+<body>
+  <div class=\"box\">
+    <h2 class=\"{"ok" if success else "fail"}\">{"인증 완료" if success else "인증 실패"}</h2>
+    <p>{escaped}</p>
+    <p>이 창은 자동으로 닫힙니다.</p>
+  </div>
+  <script>
+    (function() {{
+      try {{
+        if (window.opener) {{
+          window.opener.postMessage({{ source: 'google-oauth', status: '{status}' }}, '*');
+        }}
+      }} catch (_) {{}}
+      setTimeout(function() {{ window.close(); }}, 500);
+    }})();
+  </script>
+</body>
+</html>
+"""
 
 
 def _parse_iso_datetime(value: str) -> dt.datetime:
@@ -304,6 +490,12 @@ def provider_status(
 def authenticate_provider(
     provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
 ) -> dict[str, object]:
+    if provider == "google":
+        raise HTTPException(
+            status_code=400,
+            detail="Google 인증은 /api/providers/google/auth-url 엔드포인트를 사용해주세요.",
+        )
+
     try:
         calendar = _build_calendar_service(provider)
         calendar.authenticate()
@@ -313,6 +505,86 @@ def authenticate_provider(
         }
     except Exception as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/providers/google/auth-url")
+def google_auth_url(request: Request) -> dict[str, object]:
+    _cleanup_google_oauth_pending()
+
+    redirect_uri = _build_google_redirect_uri(request)
+    client_id = _google_client_id()
+    flow = Flow.from_client_config(
+        _build_google_web_client_config(redirect_uri),
+        scopes=GOOGLE_SCOPES,
+    )
+    flow.redirect_uri = redirect_uri
+
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    GOOGLE_OAUTH_PENDING[state] = (redirect_uri, time.time())
+
+    return {
+        "provider": "google",
+        "auth_url": auth_url,
+        "state": state,
+        "redirect_uri": redirect_uri,
+        "client_id": client_id,
+    }
+
+
+@app.get("/api/providers/google/callback")
+def google_auth_callback(
+    request: Request,
+    state: str = Query(default=""),
+) -> HTMLResponse:
+    _cleanup_google_oauth_pending()
+
+    received_state = str(state).strip()
+    if not received_state:
+        return HTMLResponse(
+            content=_google_callback_html(False, "state 값이 누락되었습니다."),
+            status_code=400,
+        )
+
+    pending = GOOGLE_OAUTH_PENDING.pop(received_state, None)
+    if pending is None:
+        return HTMLResponse(
+            content=_google_callback_html(
+                False,
+                "인증 세션이 만료되었거나 유효하지 않습니다. 다시 인증을 시도해주세요.",
+            ),
+            status_code=400,
+        )
+
+    redirect_uri, _ = pending
+
+    try:
+        flow = Flow.from_client_config(
+            _build_google_web_client_config(redirect_uri),
+            scopes=GOOGLE_SCOPES,
+            state=received_state,
+        )
+        flow.redirect_uri = redirect_uri
+        flow.fetch_token(authorization_response=_build_public_request_url(request))
+
+        token_path = _google_token_path()
+        with open(token_path, "wb") as token_file:
+            pickle.dump(flow.credentials, token_file)
+    except Exception as error:
+        return HTMLResponse(
+            content=_google_callback_html(
+                False, f"Google 인증 토큰 저장 실패: {error}"
+            ),
+            status_code=400,
+        )
+
+    return HTMLResponse(
+        content=_google_callback_html(True, "Google 캘린더 인증이 완료되었습니다."),
+        status_code=200,
+    )
 
 
 @app.post("/api/providers/apple/credentials")
