@@ -62,6 +62,22 @@ KOREAN_WEEKDAY_NAMES = [
     "토요일",
     "일요일",
 ]
+KOREAN_HOUR_WORDS = {
+    "한": 1,
+    "하나": 1,
+    "두": 2,
+    "둘": 2,
+    "세": 3,
+    "셋": 3,
+    "네": 4,
+    "넷": 4,
+    "다섯": 5,
+    "여섯": 6,
+    "일곱": 7,
+    "여덟": 8,
+    "아홉": 9,
+    "열": 10,
+}
 
 
 @dataclass(frozen=True)
@@ -98,7 +114,7 @@ class AINaturalInputService:
         config = load_openai_config(
             model_env="OPENAI_NATURAL_INPUT_MODEL",
             timeout_env="OPENAI_NATURAL_INPUT_TIMEOUT",
-            default_model="gpt-4o-mini",
+            default_model="gpt-5-mini",
             default_timeout=8.0,
         )
         self._client = OpenAIJSONClient(config)
@@ -132,18 +148,49 @@ class AINaturalInputService:
                 ),
                 "start_time": "ISO-8601 datetime or null",
                 "end_time": "ISO-8601 datetime or null",
+                "duration_minutes": "integer minutes or null",
                 "all_day": "boolean",
                 "confidence": "0.0-1.0",
             },
+            "rules": {
+                "timezone": "Interpret relative dates/times in the provided local timezone.",
+                "intent_policy": "If required fields are missing or ambiguous, choose 'unknown'.",
+                "title_policy": "Prefer concise but specific title; preserve companion/person context.",
+                "timed_default": "If start exists but end is missing, infer end using duration_minutes if available, otherwise default duration.",
+                "all_day_policy": "For all-day intent, use all_day=true and date-based bounds.",
+                "rollover_policy": "If timed duration passes midnight, set end_time to the next day (do not truncate).",
+                "duration_policy": "When user says duration (e.g., 두시간, 3시간반), set duration_minutes and keep end_time consistent with it.",
+            },
+            "examples": [
+                {
+                    "text": "오늘 친구랑 저녁 11시에 게임 약속, 세시간 정도 할 예정",
+                    "output": {
+                        "intent": "create",
+                        "title": "친구랑 게임 약속",
+                        "start_time": "today 23:00 in local timezone",
+                        "end_time": "next day 02:00 in local timezone",
+                        "duration_minutes": 180,
+                        "all_day": False,
+                        "confidence": 0.9,
+                    },
+                }
+            ],
         }
 
         data = request_json_or_empty(
             self._client,
             system_prompt=(
-                "Extract calendar intent from user text. "
-                "Return valid JSON only and follow the provided schema exactly. "
-                "Make title concise but specific. If a person/companion is mentioned, "
-                "include it in the title when useful (e.g., '민지랑 데이트')."
+                "Task: extract calendar creation intent from Korean/English user text. "
+                "Return JSON only and follow the schema exactly. "
+                "Rules: "
+                "1) intent must be 'create' or 'unknown'. "
+                "2) If date/time is unclear for reliable creation, set intent='unknown'. "
+                "3) Keep title concise but specific; preserve person/companion context when present. "
+                "4) Use ISO-8601 datetimes with timezone when available; otherwise null. "
+                "5) Extract duration_minutes when duration is explicitly stated. "
+                "6) If duration crosses midnight, end_time must roll over to next day. "
+                "7) Set confidence in [0.0, 1.0] reflecting extraction certainty. "
+                "8) Do not add any keys beyond schema fields."
             ),
             user_payload=payload,
             max_output_tokens=700,
@@ -176,6 +223,11 @@ class AINaturalInputService:
         end_time = self._to_optional_datetime(data.get("end_time"))
         all_day = bool(data.get("all_day", False))
         confidence = self._to_confidence(data.get("confidence"))
+        explicit_duration_minutes = self._extract_duration_minutes_from_ai(
+            data.get("duration_minutes")
+        )
+        if explicit_duration_minutes is None:
+            explicit_duration_minutes = self._extract_duration_minutes(source_text)
 
         if confidence < self.min_confidence:
             intent = "unknown"
@@ -189,7 +241,9 @@ class AINaturalInputService:
             )
         else:
             start_time, end_time, range_note = self._normalize_timed_range(
-                start_time, end_time
+                start_time,
+                end_time,
+                explicit_duration_minutes=explicit_duration_minutes,
             )
         if range_note:
             note_parts.append(range_note)
@@ -423,12 +477,64 @@ class AINaturalInputService:
             return 0.0
         return max(0.0, min(1.0, numeric))
 
+    @staticmethod
+    def _extract_duration_minutes(source_text: str) -> int | None:
+        normalized = re.sub(r"\s+", "", str(source_text))
+        if not normalized:
+            return None
+
+        digit_match = re.search(
+            r"(?P<hours>\d{1,2})시간(?:(?P<half>반))?(?:(?P<mins>\d{1,2})분)?",
+            normalized,
+        )
+        if digit_match:
+            hours = int(digit_match.group("hours"))
+            minutes = int(digit_match.group("mins") or "0")
+            if digit_match.group("half"):
+                minutes += 30
+            total = (hours * 60) + minutes
+            return total if total > 0 else None
+
+        word_match = re.search(
+            r"(?P<word>한|하나|두|둘|세|셋|네|넷|다섯|여섯|일곱|여덟|아홉|열)시간"
+            r"(?:(?P<half>반))?(?:(?P<mins>\d{1,2})분)?",
+            normalized,
+        )
+        if word_match:
+            word = str(word_match.group("word"))
+            hours = KOREAN_HOUR_WORDS.get(word)
+            if hours is None:
+                return None
+            minutes = int(word_match.group("mins") or "0")
+            if word_match.group("half"):
+                minutes += 30
+            total = (hours * 60) + minutes
+            return total if total > 0 else None
+
+        return None
+
+    @staticmethod
+    def _extract_duration_minutes_from_ai(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            minutes = int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        if minutes <= 0:
+            return None
+        if minutes > 24 * 60:
+            return None
+        return minutes
+
     def _normalize_timed_range(
         self,
         start_time: datetime.datetime | None,
         end_time: datetime.datetime | None,
+        explicit_duration_minutes: int | None = None,
     ) -> tuple[datetime.datetime | None, datetime.datetime | None, str | None]:
-        duration = datetime.timedelta(minutes=self.default_duration_minutes)
+        duration_minutes = explicit_duration_minutes or self.default_duration_minutes
+        duration = datetime.timedelta(minutes=duration_minutes)
         note: str | None = None
 
         if start_time is None and end_time is None:
@@ -440,14 +546,29 @@ class AINaturalInputService:
 
         if end_time is None and start_time is not None:
             end_time = start_time + duration
-            note = "end_time missing, estimated default duration"
+            if explicit_duration_minutes is not None:
+                note = f"end_time missing, estimated from explicit duration ({duration_minutes} minutes)"
+            else:
+                note = "end_time missing, estimated default duration"
 
         if start_time is None or end_time is None:
             return (start_time, end_time, note)
 
+        if explicit_duration_minutes is not None and end_time > start_time:
+            expected_end = start_time + duration
+            difference_minutes = abs(
+                int((end_time - expected_end).total_seconds() / 60)
+            )
+            if difference_minutes >= 5:
+                end_time = expected_end
+                note = f"end_time adjusted to explicit duration ({duration_minutes} minutes)"
+
         if end_time <= start_time:
             end_time = start_time + duration
-            note = "end_time not after start_time, adjusted to default duration"
+            if explicit_duration_minutes is not None:
+                note = f"end_time not after start_time, adjusted to explicit duration ({duration_minutes} minutes)"
+            else:
+                note = "end_time not after start_time, adjusted to default duration"
 
         return (start_time, end_time, note)
 

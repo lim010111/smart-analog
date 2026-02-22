@@ -131,7 +131,6 @@ class AppleCalendarProvider(CalendarProvider):
             return None
         dtstart = dtstart.dt
 
-        # 종일 일정 처리 (date 타입은 시간 정보가 없음)
         if isinstance(dtstart, datetime.date) and not isinstance(
             dtstart, datetime.datetime
         ):
@@ -184,15 +183,13 @@ class AppleCalendarProvider(CalendarProvider):
 
     def _extract_calendar_color(self, cal) -> QColor:
         try:
-            # CalDAV 캘린더의 calendar-color 속성 (Apple 사용)
             color_prop = cal.get_properties([caldav_ical.CalendarColor()])
             color_val = color_prop.get("{http://apple.com/ns/ical/}calendar-color", "")
             if color_val:
-                # "#RRGGBBAA" 또는 "#RRGGBB" 형식
                 hex_color = color_val.strip()
                 if len(hex_color) == 9:
                     return QColor(hex_color[:7])
-                elif len(hex_color) >= 7:
+                if len(hex_color) >= 7:
                     return QColor(hex_color)
         except Exception:
             pass

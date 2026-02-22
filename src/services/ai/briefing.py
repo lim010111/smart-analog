@@ -27,7 +27,7 @@ class AITodayBriefingService:
         config = load_openai_config(
             model_env="OPENAI_BRIEFING_MODEL",
             timeout_env="OPENAI_BRIEFING_TIMEOUT",
-            default_model="gpt-4o-mini",
+            default_model="gpt-5-mini",
             default_timeout=8.0,
         )
         self._client = OpenAIJSONClient(config)
@@ -107,21 +107,24 @@ class AITodayBriefingService:
             "schema": {
                 "briefing": (
                     "Korean natural-language summary in 1-2 sentences. "
-                    "Focus on ongoing/upcoming plans from now, and include useful "
-                    "detail from event descriptions when available. Mention notable "
-                    "schedule clusters and free time blocks."
+                    "Focus only on ongoing/upcoming plans from now. "
+                    "Mention notable schedule clusters and meaningful free-time gaps. "
+                    "If event descriptions add practical context, include it briefly."
                 )
             },
         }
         response = request_json_or_empty(
             self._client,
             system_prompt=(
-                "You are a helpful daily scheduler assistant. "
-                "Generate a concise Korean briefing for the remaining day "
-                "from the current time. "
-                "Prioritize ongoing and upcoming events, and use event "
-                "descriptions to enrich context when helpful. "
-                "Return valid JSON only."
+                "Task: generate a concise Korean daily briefing for the remaining day. "
+                "Scope: only ongoing/upcoming events from now; ignore completed events. "
+                "Style: natural, practical, 1-2 sentences, no markdown. "
+                "Rules: "
+                "1) Prioritize near-term events and overlaps. "
+                "2) Mention meaningful free-time gaps when present. "
+                "3) Use event description details only when they add useful context. "
+                "4) Do not invent facts beyond input data. "
+                "5) Output JSON only with key 'briefing'."
             ),
             user_payload=payload,
             max_output_tokens=450,

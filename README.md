@@ -71,7 +71,8 @@ Apple Calendar은 iCloud CalDAV를 통해 연동됩니다. **앱 전용 비밀�
 
 ```bash
 OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_MODEL=gpt-4o-mini
+OPENAI_MODEL=gpt-5-mini
+OPENAI_REASONING_EFFORT=high
 OPENAI_TIMEOUT=8
 ```
 
@@ -85,13 +86,12 @@ OpenAI API 키와 사용자 정의 색상 스키마를 설정하면 일정 제�
 ```bash
 ENABLE_AI_EVENT_COLOR=true
 OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_COLOR_MODEL=gpt-4o-mini
+OPENAI_COLOR_MODEL=gpt-5-nano
 ```
 
 3. 우클릭 메뉴 > **Color Schema** 에서 색상-카테고리 규칙을 정의합니다.
    - 선택 가능한 색상은 현재 캘린더 프로바이더가 실제로 저장 가능한 색상만 표시됩니다.
-4. **Generate Keywords** 버튼으로 AI가 각 카테고리에 맞는 키워드를 자동 생성합니다.
-5. 우클릭 메뉴 > **Apply AI Colors to All Events** 로 전체 일정 범위에 색상을 일괄 적용할 수 있습니다.
+4. 우클릭 메뉴 > **Apply AI Colors to All Events** 로 전체 일정 범위에 색상을 일괄 적용할 수 있습니다.
 
 > [!NOTE]
 > 색상 스키마가 설정되지 않으면 색상 분류가 적용되지 않습니다.
@@ -105,7 +105,7 @@ OPENAI_COLOR_MODEL=gpt-4o-mini
 
 ```bash
 ENABLE_AI_NATURAL_INPUT=false
-OPENAI_NATURAL_INPUT_MODEL=gpt-4o-mini
+OPENAI_NATURAL_INPUT_MODEL=gpt-5-mini
 OPENAI_NATURAL_INPUT_TIMEOUT=8
 OPENAI_NATURAL_INPUT_MAX_CHARS=300
 OPENAI_NATURAL_INPUT_DEFAULT_DURATION_MINUTES=60
@@ -129,7 +129,7 @@ OPENAI_NATURAL_INPUT_MIN_CONFIDENCE=0.6
 ENABLE_AI_TODAY_BRIEFING=false
 ENABLE_AI_TODAY_BRIEFING_TTS=false
 AI_TTS_BACKEND=openai
-OPENAI_BRIEFING_MODEL=gpt-4o-mini
+OPENAI_BRIEFING_MODEL=gpt-5-mini
 OPENAI_BRIEFING_TIMEOUT=8
 OPENAI_BRIEFING_MAX_EVENTS=20
 OPENAI_BRIEFING_REFRESH_SLOT_MINUTES=15
@@ -227,6 +227,7 @@ clock_widget/
   - **Today Briefing**: 오늘의 AI 브리핑 기능 on/off를 전환합니다.
   - **Show Today Briefing**: 현재 브리핑을 스타일 다이얼로그로 확인합니다.
   - **Briefing TTS**: 브리핑 음성 읽기 on/off를 전환합니다.
+  - **Show Today Briefing**: 현재 브리핑을 스타일 다이얼로그로 확인합니다.
   - **Speak Today Briefing**: 현재 브리핑을 즉시 음성으로 읽습니다.
   - **AI Natural Input**: 자연어 문장을 파싱하고 프리뷰에서 이벤트 생성 여부를 확인합니다.
   - **Sync Calendar**: 캘린더와 수동으로 동기화합니다.
@@ -234,3 +235,33 @@ clock_widget/
   - **Logout**: 현재 캘린더 계정에서 로그아웃합니다.
   - **Exit**: 위젯을 종료합니다.
 - **종료**: 시계 우측 상단의 닫기(X) 버튼을 클릭하면 앱이 종료됩니다.
+
+---
+
+## Web Service (Next.js + FastAPI)
+
+웹 버전 마이그레이션 브랜치에서는 아래 두 서비스를 함께 실행합니다.
+
+### 1) FastAPI backend
+
+```bash
+uv pip install -r web/backend/requirements.txt
+uv run uvicorn web.backend.app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 2) Next.js frontend
+
+```bash
+cd web/frontend
+npm install
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm run dev
+```
+
+브라우저에서 `http://localhost:3000` 접속 시 `/api/briefing/today` 결과를 카드 UI로 확인할 수 있습니다.
+
+### Fly.io 배포 가이드
+
+웹 버전 배포(단일 컨테이너, nginx reverse proxy, `/data` 볼륨 마운트) 절차는 아래 문서를 참고하세요.
+
+- `docs/flyio-deploy-ko.md`
+- 원클릭 점검/배포 스크립트: `scripts/fly-deploy-check.sh`

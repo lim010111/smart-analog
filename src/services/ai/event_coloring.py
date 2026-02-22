@@ -3,7 +3,7 @@ from collections.abc import Iterable
 from PySide6.QtGui import QColor
 
 from src.models.event import CalendarEvent
-from src.services.ai.color_schema import ColorRule, CustomColorSchema
+from src.services.ai.color_schema import CustomColorSchema
 from src.services.ai.core import (
     OpenAIJSONClient,
     load_openai_config,
@@ -21,7 +21,7 @@ class AIEventColorService:
         openai_config = load_openai_config(
             model_env="OPENAI_COLOR_MODEL",
             timeout_env="OPENAI_COLOR_TIMEOUT",
-            default_model="gpt-4o-mini",
+            default_model="gpt-5-nano",
             default_timeout=8.0,
         )
         self._openai_client = OpenAIJSONClient(openai_config)
@@ -106,9 +106,10 @@ class AIEventColorService:
                 self._custom_schema.to_category_colors().keys()
             ),
             "instructions": (
-                "Classify each title into one category. "
-                "If no category fits, use 'unmatched'. "
-                "Return strict JSON with this shape: "
+                "Classify each title into exactly one category from allowed_categories. "
+                "Use 'unmatched' when no category clearly fits. "
+                "Do not invent categories. "
+                "Return strict JSON only with shape: "
                 "{'items':[{'title':'...','category':'...'}]}"
             ),
         }
@@ -116,10 +117,14 @@ class AIEventColorService:
         data = request_json_or_empty(
             self._openai_client,
             system_prompt=(
-                "You classify calendar event titles. "
-                "Use only allowed_categories. "
-                "If uncertain, use 'unmatched'. "
-                "Respond with valid JSON only."
+                "Task: classify Korean/English calendar event titles for color mapping. "
+                "Rules: "
+                "1) Use only values in allowed_categories. "
+                "2) Choose one category per input title. "
+                "3) Preserve the exact input title text in output. "
+                "4) If uncertain, ambiguous, or multi-topic, pick 'unmatched'. "
+                "5) Never output text outside JSON. "
+                "Output JSON object only: {'items':[{'title':str,'category':str}]}."
             ),
             user_payload=prompt,
             max_output_tokens=500,
@@ -182,61 +187,3 @@ class AIEventColorService:
             color = QColor(hex_color)
             color.setAlpha(180)
             event.color = color
-
-    def generate_keywords_for_rules(self, rules: list[ColorRule]) -> list[ColorRule]:
-        if not self._openai_client.is_available() or not rules:
-            return rules
-
-        labels = [rule.label for rule in rules if rule.label.strip()]
-        if not labels:
-            return rules
-
-        prompt = {
-            "categories": labels,
-            "instructions": (
-                "For each category label, generate 5-10 keywords (Korean and English) "
-                "that calendar event titles in that category would typically contain. "
-                "Return strict JSON: "
-                "{'items':[{'label':'...','keywords':['kw1','kw2',...]}]}"
-            ),
-        }
-
-        data = request_json_or_empty(
-            self._openai_client,
-            system_prompt=(
-                "You generate keywords for calendar event categories. "
-                "Keywords should be short, lowercase words or phrases "
-                "that commonly appear in calendar event titles. "
-                "Include both Korean and English keywords. "
-                "Respond with valid JSON only."
-            ),
-            user_payload=prompt,
-            max_output_tokens=1000,
-            model=self.model,
-        )
-        if not data:
-            return rules
-
-        items = data.get("items")
-        if not isinstance(items, list):
-            return rules
-
-        keywords_by_label: dict[str, list[str]] = {}
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            label = str(item.get("label", "")).strip()
-            keywords = item.get("keywords", [])
-            if label and isinstance(keywords, list):
-                keywords_by_label[label] = [
-                    str(kw).strip().lower()
-                    for kw in keywords
-                    if isinstance(kw, str) and kw.strip()
-                ]
-
-        for rule in rules:
-            generated = keywords_by_label.get(rule.label, [])
-            if generated:
-                rule.keywords = generated
-
-        return rules

@@ -38,10 +38,10 @@ class OpenAIJSONClient:
         resolved_model = (model or self._config.model).strip() or self._config.model
 
         try:
-            response = sdk_client.responses.create(
-                model=resolved_model,
-                max_output_tokens=max_output_tokens,
-                input=[
+            request_kwargs: dict[str, Any] = {
+                "model": resolved_model,
+                "max_output_tokens": max_output_tokens,
+                "input": [
                     {
                         "role": "system",
                         "content": system_prompt,
@@ -51,6 +51,14 @@ class OpenAIJSONClient:
                         "content": json.dumps(dict(user_payload), ensure_ascii=False),
                     },
                 ],
+            }
+            if self._is_gpt5_model(resolved_model):
+                request_kwargs["reasoning"] = {
+                    "effort": self._config.reasoning_effort,
+                }
+
+            response = sdk_client.responses.create(
+                **request_kwargs,
             )
         except Exception as error:
             raise OpenAIRequestError(f"OpenAI request failed: {error}") from error
@@ -85,3 +93,7 @@ class OpenAIJSONClient:
             raise OpenAIClientUnavailableError(
                 f"OpenAI client initialization failed: {error}"
             ) from error
+
+    @staticmethod
+    def _is_gpt5_model(model: str) -> bool:
+        return model.strip().lower().startswith("gpt-5")

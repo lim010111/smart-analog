@@ -13,8 +13,6 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QFrame,
 )
-from PySide6.QtCore import Qt
-
 from src.services.providers.apple_provider import AppleCalendarProvider
 
 
@@ -63,7 +61,7 @@ class AppleLoginDialog(QDialog):
 
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("App-Specific Password")
-        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.password_input)
 
         btn_layout = QHBoxLayout()
@@ -124,10 +122,6 @@ _DARK_DIALOG_STYLE = """
         padding: 0;
     }
     QPushButton#colorBtn:hover { border-color: #555; }
-    QPushButton#generateBtn {
-        background-color: #6f59d9; color: white;
-    }
-    QPushButton#generateBtn:hover { background-color: #5a45c0; }
     QScrollArea { border: none; background-color: transparent; }
 """
 
@@ -203,11 +197,6 @@ class CustomColorSchemaDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
 
-        generate_btn = QPushButton("Generate Keywords")
-        generate_btn.setObjectName("generateBtn")
-        generate_btn.clicked.connect(self._generate_keywords)
-        btn_layout.addWidget(generate_btn)
-
         save_btn = QPushButton("Save")
         save_btn.clicked.connect(self._save_schema)
         btn_layout.addWidget(save_btn)
@@ -271,52 +260,6 @@ class CustomColorSchemaDialog(QDialog):
                 continue
             rules.append(ColorRule(color_hex=color_hex, label=label))
         return rules
-
-    def _generate_keywords(self):
-        rules = self._collect_rules()
-        if not rules:
-            QMessageBox.warning(
-                self, "No Rules", "Add at least one category label before generating."
-            )
-            return
-
-        if not self.ai_service.api_key:
-            QMessageBox.warning(
-                self,
-                "API Key Required",
-                "Set OPENAI_API_KEY in .env to use AI keyword generation.",
-            )
-            return
-
-        self.setCursor(Qt.WaitCursor)
-        try:
-            updated = self.ai_service.generate_keywords_for_rules(rules)
-            schema = self.ai_service.custom_schema
-            schema.rules = updated
-            schema.save()
-            self.ai_service.reload_schema()
-        finally:
-            self.unsetCursor()
-
-        keyword_summary = "\n".join(
-            f"• {r.label}: {', '.join(r.keywords[:5])}{'...' if len(r.keywords) > 5 else ''}"
-            for r in updated
-            if r.keywords
-        )
-
-        if keyword_summary:
-            QMessageBox.information(
-                self,
-                "Keywords Generated",
-                f"Generated keywords:\n\n{keyword_summary}",
-            )
-            self.accept()
-        else:
-            QMessageBox.warning(
-                self,
-                "Generation Failed",
-                "Could not generate keywords. Check your API key and try again.",
-            )
 
     def _save_schema(self):
         rules = self._collect_rules()
