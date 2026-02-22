@@ -72,6 +72,12 @@ interface NaturalCreateResponse {
   created: WebEvent | null;
 }
 
+interface GoogleAuthUrlResponse {
+  provider: string;
+  auth_url: string;
+  state: string;
+}
+
 interface HoverInfo {
   event: WebEvent;
   x: number;
@@ -611,15 +617,73 @@ export default function Home() {
     setMessage("");
     try {
       if (provider === "google") {
-        const data = await fetchJson<{ authenticated: boolean }>(
-          `${API_BASE_URL}/api/providers/authenticate?provider=${provider}`,
+        const data = await fetchJson<GoogleAuthUrlResponse>(
+          `${API_BASE_URL}/api/providers/google/auth-url`,
           { method: "POST" },
         );
-        if (data.authenticated) {
-          setProviderAuthenticated(true);
+        const popup = window.open(
+          data.auth_url,
+          "google-calendar-auth",
+          "width=540,height=720,menubar=no,toolbar=no,location=yes,resizable=yes,scrollbars=yes,status=no",
+        );
+        if (!popup) {
+          setMessage("팝업이 차단되었습니다. 브라우저에서 팝업을 허용한 뒤 다시 시도해주세요.");
+          return;
+        }
+
+        setMessage("Google 인증 창에서 권한을 승인해주세요...");
+
+        const authSuccess = await new Promise<boolean>((resolve) => {
+          let done = false;
+          let checks = 0;
+
+          const finish = (value: boolean) => {
+            if (done) return;
+            done = true;
+            window.removeEventListener("message", onMessage);
+            window.clearInterval(intervalId);
+            resolve(value);
+          };
+
+          const onMessage = (event: MessageEvent) => {
+            const payload = event.data as { source?: string; status?: string } | null;
+            if (!payload || payload.source !== "google-oauth") return;
+            finish(payload.status === "success");
+          };
+
+          window.addEventListener("message", onMessage);
+
+          const intervalId = window.setInterval(async () => {
+            checks += 1;
+            if (popup.closed) {
+              finish(false);
+              return;
+            }
+            if (checks % 2 === 0) {
+              try {
+                const status = await fetchJson<{ authenticated: boolean }>(
+                  `${API_BASE_URL}/api/providers/status?provider=google`,
+                );
+                if (status.authenticated) {
+                  finish(true);
+                }
+              } catch (pollError) {
+                void pollError;
+              }
+            }
+            if (checks >= 120) {
+              finish(false);
+            }
+          }, 1000);
+        });
+
+        if (authSuccess) {
+          await loadAuthStatus();
           await loadEvents();
           await loadBriefing();
           setMessage("Google 캘린더 인증을 완료했습니다.");
+        } else {
+          setMessage("Google 인증이 완료되지 않았습니다. 다시 시도해주세요.");
         }
       } else if (provider === "apple") {
         setMessage("아래 Apple ID/앱 비밀번호를 입력해주세요.");
