@@ -1,6 +1,7 @@
 import json
 import os
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 
 SCHEMA_FILE = "color_schema.json"
@@ -10,21 +11,18 @@ SCHEMA_FILE = "color_schema.json"
 class ColorRule:
     color_hex: str
     label: str
-    keywords: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str]:
         return {
             "color_hex": self.color_hex,
             "label": self.label,
-            "keywords": self.keywords,
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ColorRule":
+    def from_dict(cls, data: Mapping[str, object]) -> "ColorRule":
         return cls(
             color_hex=str(data.get("color_hex", "#8a8f98")),
             label=str(data.get("label", "")),
-            keywords=list(data.get("keywords", [])),
         )
 
 
@@ -78,13 +76,6 @@ class CustomColorSchema:
             self._rule_key(rule): rule.color_hex
             for rule in self.rules
             if rule.label.strip()
-        }
-
-    def to_keyword_rules(self) -> dict[str, tuple[str, ...]]:
-        return {
-            self._rule_key(rule): tuple(rule.keywords)
-            for rule in self.rules
-            if rule.label.strip() and rule.keywords
         }
 
     @staticmethod

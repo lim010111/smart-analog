@@ -8,8 +8,11 @@ import importlib
 import os
 import pickle
 import tempfile
+import threading
 import time
 import uuid
+from contextlib import contextmanager
+from urllib.parse import urlsplit
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -55,7 +58,6 @@ class CreateEventRequest(BaseModel):
 class ColorRulePayload(BaseModel):
     color_hex: str = Field(min_length=4, max_length=9)
     label: str = Field(min_length=1, max_length=80)
-    keywords: list[str] = Field(default_factory=list)
 
 
 class ColorSchemaRequest(BaseModel):
@@ -78,6 +80,7 @@ class AppleCredentialsRequest(BaseModel):
 class WebSettingsRequest(BaseModel):
     theme: str = Field(default="dark")
     event_opacity: int = Field(default=150, ge=0, le=255)
+    clock_opacity: int = Field(default=100, ge=0, le=100)
     briefing_enabled: bool = True
     briefing_tts_enabled: bool = False
     widget_pinned: bool = True
@@ -86,6 +89,7 @@ class WebSettingsRequest(BaseModel):
 WEB_SETTINGS: dict[str, object] = {
     "theme": os.getenv("WEB_THEME_DEFAULT", "dark"),
     "event_opacity": 150,
+    "clock_opacity": 100,
     "briefing_enabled": True,
     "briefing_tts_enabled": False,
     "widget_pinned": True,
@@ -93,6 +97,113 @@ WEB_SETTINGS: dict[str, object] = {
 
 GOOGLE_OAUTH_PENDING: dict[str, tuple[str, float]] = {}
 GOOGLE_OAUTH_TTL_SECONDS = 600
+OAUTHLIB_TRANSPORT_LOCK = threading.RLock()
+
+ColorApplyValue = bool | int | float | str | None
+
+COLOR_APPLY_LOCK = threading.Lock()
+COLOR_APPLY_STATE: dict[str, dict[str, ColorApplyValue]] = {}
+
+
+def _get_color_apply_state(provider: str) -> dict[str, ColorApplyValue]:
+    if provider in COLOR_APPLY_STATE:
+        return COLOR_APPLY_STATE[provider]
+
+    state: dict[str, ColorApplyValue] = {
+        "running": False,
+        "rerun_requested": False,
+        "last_started_at": None,
+        "last_finished_at": None,
+        "last_processed": 0,
+        "last_updated": 0,
+        "last_error": "",
+    }
+    COLOR_APPLY_STATE[provider] = state
+    return state
+
+
+def _day_range_local(target_date: dt.date) -> tuple[dt.datetime, dt.datetime]:
+    local_tz = dt.datetime.now().astimezone().tzinfo
+    if local_tz is None:
+        local_tz = dt.timezone.utc
+    start_of_day = dt.datetime.combine(target_date, dt.time.min, tzinfo=local_tz)
+    end_of_day = dt.datetime.combine(target_date, dt.time.max, tzinfo=local_tz)
+    return start_of_day, end_of_day
+
+
+def _today_range_local() -> tuple[dt.datetime, dt.datetime]:
+    return _day_range_local(dt.datetime.now().astimezone().date())
+
+
+def _run_background_color_apply(
+    provider: str,
+    max_results: int | None,
+    page_size: int,
+) -> None:
+    while True:
+        processed = 0
+        updated = 0
+        error_text = ""
+
+        try:
+            calendar = _build_calendar_service(provider)
+            _require_provider_credentials(calendar)
+            if calendar.can_write_event_colors():
+                processed, updated = calendar.sync_ai_colors_for_all_events(
+                    max_results=max_results,
+                    page_size=page_size,
+                    throttle_seconds=0.05,
+                )
+        except Exception as error:
+            error_text = str(error)
+
+        with COLOR_APPLY_LOCK:
+            state = _get_color_apply_state(provider)
+            state["last_processed"] = int(processed)
+            state["last_updated"] = int(updated)
+            state["last_error"] = error_text
+            state["last_finished_at"] = time.time()
+
+            rerun_requested = bool(state.get("rerun_requested"))
+            if not rerun_requested:
+                state["running"] = False
+                return
+
+            state["rerun_requested"] = False
+            state["last_started_at"] = time.time()
+
+
+def _start_or_queue_background_color_apply(
+    provider: str,
+    max_results: int | None,
+    page_size: int,
+) -> dict[str, bool]:
+    with COLOR_APPLY_LOCK:
+        state = _get_color_apply_state(provider)
+        if bool(state.get("running")):
+            state["rerun_requested"] = True
+            return {
+                "background_started": False,
+                "background_queued": True,
+            }
+
+        state["running"] = True
+        state["rerun_requested"] = False
+        state["last_error"] = ""
+        state["last_started_at"] = time.time()
+
+    worker = threading.Thread(
+        target=_run_background_color_apply,
+        args=(provider, max_results, page_size),
+        daemon=True,
+        name=f"color-apply-{provider}",
+    )
+    worker.start()
+
+    return {
+        "background_started": True,
+        "background_queued": False,
+    }
 
 
 def _to_web_event(event) -> WebEvent:
@@ -215,9 +326,9 @@ def _build_google_redirect_uri(request: Request) -> str:
             status_code=400,
             detail="공개 호스트를 확인할 수 없습니다. WEB_PUBLIC_HOST를 설정해주세요.",
         )
-    if proto == "http" and host not in {"localhost", "127.0.0.1"}:
-        proto = "https"
     host = _normalize_host(host)
+    if proto == "http" and not _is_localhost_host(host):
+        proto = "https"
     return f"{proto}://{host}/api/providers/google/callback"
 
 
@@ -248,6 +359,56 @@ def _normalize_host(raw_host: str) -> str:
     return host
 
 
+def _is_localhost_host(host: str) -> bool:
+    normalized = _normalize_host(host)
+    candidate = normalized
+
+    if candidate.startswith("[") and "]" in candidate:
+        candidate = candidate[1 : candidate.index("]")]
+    elif ":" in candidate and candidate.count(":") == 1:
+        candidate = candidate.split(":", 1)[0]
+
+    return candidate in {"localhost", "127.0.0.1", "::1"}
+
+
+def _is_local_insecure_redirect_uri(redirect_uri: str) -> bool:
+    parsed = urlsplit(str(redirect_uri).strip())
+    host = parsed.hostname or ""
+    return parsed.scheme == "http" and _is_localhost_host(host)
+
+
+@contextmanager
+def _oauthlib_local_insecure_transport(redirect_uri: str):
+    if not _is_local_insecure_redirect_uri(redirect_uri):
+        yield
+        return
+
+    with OAUTHLIB_TRANSPORT_LOCK:
+        previous = os.environ.get("OAUTHLIB_INSECURE_TRANSPORT")
+        os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("OAUTHLIB_INSECURE_TRANSPORT", None)
+            else:
+                os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = previous
+
+
+@contextmanager
+def _oauthlib_relax_token_scope():
+    with OAUTHLIB_TRANSPORT_LOCK:
+        previous = os.environ.get("OAUTHLIB_RELAX_TOKEN_SCOPE")
+        os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("OAUTHLIB_RELAX_TOKEN_SCOPE", None)
+            else:
+                os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = previous
+
+
 def _build_public_request_url(request: Request) -> str:
     host = (
         os.getenv("WEB_PUBLIC_HOST", "").strip()
@@ -266,7 +427,7 @@ def _build_public_request_url(request: Request) -> str:
             detail="공개 호스트를 확인할 수 없습니다. WEB_PUBLIC_HOST를 설정해주세요.",
         )
     host = _normalize_host(host)
-    if proto == "http" and host not in {"localhost", "127.0.0.1"}:
+    if proto == "http" and not _is_localhost_host(host):
         proto = "https"
     path = request.url.path
     query = request.url.query
@@ -347,6 +508,13 @@ def _parse_iso_datetime(value: str) -> dt.datetime:
             local_tz = dt.timezone.utc
         parsed = parsed.replace(tzinfo=local_tz)
     return parsed.astimezone()
+
+
+def _parse_iso_date(value: str) -> dt.date:
+    text = str(value).strip()
+    if not text:
+        raise ValueError("날짜 값이 필요합니다.")
+    return dt.date.fromisoformat(text)
 
 
 def _normalize_response_format(value: str) -> str:
@@ -513,17 +681,18 @@ def google_auth_url(request: Request) -> dict[str, object]:
 
     redirect_uri = _build_google_redirect_uri(request)
     client_id = _google_client_id()
-    flow = Flow.from_client_config(
-        _build_google_web_client_config(redirect_uri),
-        scopes=GOOGLE_SCOPES,
-    )
-    flow.redirect_uri = redirect_uri
+    with _oauthlib_local_insecure_transport(redirect_uri):
+        flow = Flow.from_client_config(
+            _build_google_web_client_config(redirect_uri),
+            scopes=GOOGLE_SCOPES,
+        )
+        flow.redirect_uri = redirect_uri
 
-    auth_url, state = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
-    )
+        auth_url, state = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
+        )
     GOOGLE_OAUTH_PENDING[state] = (redirect_uri, time.time())
 
     return {
@@ -562,13 +731,22 @@ def google_auth_callback(
     redirect_uri, _ = pending
 
     try:
-        flow = Flow.from_client_config(
-            _build_google_web_client_config(redirect_uri),
-            scopes=GOOGLE_SCOPES,
-            state=received_state,
-        )
-        flow.redirect_uri = redirect_uri
-        flow.fetch_token(authorization_response=_build_public_request_url(request))
+        with (
+            _oauthlib_local_insecure_transport(redirect_uri),
+            _oauthlib_relax_token_scope(),
+        ):
+            flow = Flow.from_client_config(
+                _build_google_web_client_config(redirect_uri),
+                scopes=GOOGLE_SCOPES,
+                state=received_state,
+            )
+            flow.redirect_uri = redirect_uri
+            flow.fetch_token(authorization_response=_build_public_request_url(request))
+
+        if not flow.credentials.has_scopes(GOOGLE_SCOPES):
+            raise ValueError(
+                "Google 인증에 필요한 캘린더 권한이 누락되었습니다. 권한을 다시 승인해주세요."
+            )
 
         token_path = _google_token_path()
         with open(token_path, "wb") as token_file:
@@ -628,6 +806,7 @@ def get_settings() -> dict[str, object]:
     return {
         "theme": WEB_SETTINGS["theme"],
         "event_opacity": WEB_SETTINGS["event_opacity"],
+        "clock_opacity": WEB_SETTINGS["clock_opacity"],
         "briefing_enabled": WEB_SETTINGS["briefing_enabled"],
         "briefing_tts_enabled": WEB_SETTINGS["briefing_tts_enabled"],
         "widget_pinned": WEB_SETTINGS["widget_pinned"],
@@ -638,6 +817,7 @@ def get_settings() -> dict[str, object]:
 def update_settings(request: WebSettingsRequest) -> dict[str, object]:
     WEB_SETTINGS["theme"] = _normalize_theme(request.theme)
     WEB_SETTINGS["event_opacity"] = int(request.event_opacity)
+    WEB_SETTINGS["clock_opacity"] = int(request.clock_opacity)
     WEB_SETTINGS["briefing_enabled"] = bool(request.briefing_enabled)
     WEB_SETTINGS["briefing_tts_enabled"] = bool(request.briefing_tts_enabled)
     WEB_SETTINGS["widget_pinned"] = bool(request.widget_pinned)
@@ -648,15 +828,40 @@ def update_settings(request: WebSettingsRequest) -> dict[str, object]:
 def today_events(
     provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
     max_results: int = Query(default=20, ge=1, le=200),
+    date: str | None = Query(default=None),
 ) -> dict[str, object]:
+    target_date = dt.datetime.now().astimezone().date()
+    if date:
+        try:
+            target_date = _parse_iso_date(date)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
     try:
         calendar = _build_calendar_service(provider)
         _require_provider_credentials(calendar)
-        events = calendar.get_todays_events(max_results=max_results)
+        start_of_day, end_of_day = _day_range_local(target_date)
+        active_provider = calendar.active_provider
+        if active_provider is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"제공자 '{provider}'가 활성화되지 않았습니다.",
+            )
+
+        events = active_provider.get_events_in_range(
+            start_time=start_of_day,
+            end_time=end_of_day,
+            max_results=max_results,
+            page_size=min(max_results, 250),
+        )
+        if calendar.can_write_event_colors() and events:
+            calendar.ai_event_color_service.apply(events)
+            active_provider.write_event_colors(events)
+
         payload = [asdict(_to_web_event(event)) for event in events]
         return {
             "provider": provider,
-            "date": dt.date.today().isoformat(),
+            "date": target_date.isoformat(),
             "count": len(payload),
             "events": payload,
         }
@@ -929,7 +1134,6 @@ def get_color_schema(
                 {
                     "color_hex": rule.color_hex,
                     "label": rule.label,
-                    "keywords": rule.keywords,
                 }
                 for rule in service.custom_schema.rules
             ],
@@ -958,7 +1162,6 @@ def update_color_schema(
                 ColorRule(
                     color_hex=item.color_hex.strip().lower(),
                     label=item.label.strip(),
-                    keywords=[kw.strip().lower() for kw in item.keywords if kw.strip()],
                 )
             )
 
@@ -993,15 +1196,29 @@ def apply_colors_all(
                 detail=f"제공자 '{provider}'는 일정 색상 쓰기를 지원하지 않습니다.",
             )
 
-        total, updated = calendar.sync_ai_colors_for_all_events(
+        today_start, today_end = _today_range_local()
+        today_total, today_updated = calendar.sync_ai_colors_for_range(
+            start_time=today_start,
+            end_time=today_end,
+            max_results=None,
+            page_size=page_size,
+            throttle_seconds=0.0,
+        )
+
+        background = _start_or_queue_background_color_apply(
+            provider=provider,
             max_results=max_results,
             page_size=page_size,
-            throttle_seconds=0.05,
         )
+
         return {
             "provider": provider,
-            "processed": total,
-            "updated": updated,
+            "processed": today_total,
+            "updated": today_updated,
+            "processed_today": today_total,
+            "updated_today": today_updated,
+            "background_started": background["background_started"],
+            "background_queued": background["background_queued"],
         }
     except HTTPException:
         raise
@@ -1009,3 +1226,31 @@ def apply_colors_all(
         raise HTTPException(status_code=401, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.get("/api/colors/apply-status")
+def get_apply_colors_status(
+    provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
+) -> dict[str, object]:
+    with COLOR_APPLY_LOCK:
+        state = _get_color_apply_state(provider)
+        last_processed_raw = state.get("last_processed", 0)
+        last_updated_raw = state.get("last_updated", 0)
+        last_processed = (
+            int(last_processed_raw)
+            if isinstance(last_processed_raw, (int, float))
+            else 0
+        )
+        last_updated = (
+            int(last_updated_raw) if isinstance(last_updated_raw, (int, float)) else 0
+        )
+        return {
+            "provider": provider,
+            "running": bool(state.get("running", False)),
+            "queued": bool(state.get("rerun_requested", False)),
+            "last_started_at": state.get("last_started_at"),
+            "last_finished_at": state.get("last_finished_at"),
+            "last_processed": last_processed,
+            "last_updated": last_updated,
+            "last_error": str(state.get("last_error", "")),
+        }

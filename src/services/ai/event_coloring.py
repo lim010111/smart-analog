@@ -92,12 +92,9 @@ class AIEventColorService:
         return unique_titles[: self.max_titles]
 
     def _classify_titles(self, titles: list[str]) -> dict[str, str]:
-        if self._openai_client.is_available():
-            categories = self._classify_with_openai(titles)
-            if categories:
-                return categories
-
-        return self._classify_with_keywords(titles)
+        if not self._openai_client.is_available():
+            return {}
+        return self._classify_with_openai(titles)
 
     def _classify_with_openai(self, titles: list[str]) -> dict[str, str]:
         prompt = {
@@ -145,21 +142,6 @@ class AIEventColorService:
             category = self._normalize_category(item.get("category"))
             if title and category:
                 categories[title.lower()] = category
-
-        return categories
-
-    def _classify_with_keywords(self, titles: list[str]) -> dict[str, str]:
-        schema_rules = self._custom_schema.to_keyword_rules()
-
-        categories: dict[str, str] = {}
-        for title in titles:
-            lowered = title.lower()
-            categories[lowered] = "unmatched"
-
-            for category, keywords in schema_rules.items():
-                if any(keyword in lowered for keyword in keywords):
-                    categories[lowered] = category
-                    break
 
         return categories
 
