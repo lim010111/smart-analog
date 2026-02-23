@@ -242,6 +242,17 @@ clock_widget/
 
 웹 버전 마이그레이션 브랜치에서는 아래 두 서비스를 함께 실행합니다.
 
+### 올인원 로컬 실행
+
+```bash
+./scripts/local-web-dev.sh
+```
+
+- 기본 URL: 프론트 `http://127.0.0.1:3000`, 백엔드 `http://127.0.0.1:8000`
+- 첫 실행에서는 backend/frontend 의존성을 자동 설치합니다.
+- 의존성 설치를 건너뛰려면 `--skip-install`을 사용하세요.
+- 기존 프론트 개발 서버를 정리하고 새로 띄우려면 `--kill-existing-frontend`를 사용하세요.
+
 ### 1) FastAPI backend
 
 ```bash
