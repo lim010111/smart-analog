@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+} from "react";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? process.env.BACKEND_URL ?? "http://localhost:8000";
@@ -10,7 +18,6 @@ const REQUEST_TIMEOUT_MS = 15000;
 type ColorRule = {
   color_hex: string;
   label: string;
-  keywords: string[];
 };
 
 function extractErrorDetail(raw: string): string | null {
@@ -68,8 +75,20 @@ export default function ColorSchemaSettingsPage() {
   const [palette, setPalette] = useState<string[]>([]);
   const [schemaRules, setSchemaRules] = useState<ColorRule[]>([]);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
   const [openPaletteIndex, setOpenPaletteIndex] = useState<number | null>(null);
+  const [schemaVisualOrder, setSchemaVisualOrder] = useState<number[]>([]);
+  const [draggingSchemaVisualIndex, setDraggingSchemaVisualIndex] = useState<number | null>(null);
+  const [dragOverSchemaVisualIndex, setDragOverSchemaVisualIndex] = useState<number | null>(null);
+  const [dragOverSchemaDropPosition, setDragOverSchemaDropPosition] = useState<"before" | "after">("before");
+  const [recentlyMovedSchemaRuleIndex, setRecentlyMovedSchemaRuleIndex] = useState<number | null>(null);
+  const syncTimerRef = useRef<number | null>(null);
+  const schemaReorderTimerRef = useRef<number | null>(null);
+  const schemaItemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const previousSchemaItemTopsRef = useRef<Map<number, number>>(new Map());
+  const schemaFlipResetTimersRef = useRef<Map<number, number>>(new Map());
+  const lastSyncedRulesRef = useRef<string>("[]");
 
   const hasEventColorSupport = useMemo(() => palette.length > 0, [palette.length]);
 
@@ -84,7 +103,10 @@ export default function ColorSchemaSettingsPage() {
       const schemaData = await fetchJson<{ rules: ColorRule[] }>(
         `${API_BASE_URL}/api/colors/schema?provider=${provider}`,
       );
-      setSchemaRules(schemaData.rules ?? []);
+      const rules = schemaData.rules ?? [];
+      setSchemaRules(rules);
+      setSchemaVisualOrder(Array.from({ length: rules.length }, (_, idx) => idx));
+      lastSyncedRulesRef.current = JSON.stringify(rules);
     } finally {
       setLoading(false);
     }
@@ -120,51 +142,89 @@ export default function ColorSchemaSettingsPage() {
     };
   }, []);
 
-  const onSaveSchema = async () => {
-    setLoading(true);
-    setMessage("");
-    try {
-      await fetchJson(`${API_BASE_URL}/api/colors/schema?provider=${provider}`, {
-        method: "PUT",
-        body: JSON.stringify({ rules: schemaRules }),
-      });
-      setMessage("색상 스키마를 저장했습니다.");
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "알 수 없는 오류";
-      setMessage(text);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const syncSchemaRules = useCallback(
+    async (nextRules: ColorRule[]) => {
+      const serialized = JSON.stringify(nextRules);
+      if (serialized === lastSyncedRulesRef.current) {
+        return;
+      }
+      setSyncing(true);
+      setMessage("");
+      try {
+        await fetchJson(`${API_BASE_URL}/api/colors/schema?provider=${provider}`, {
+          method: "PUT",
+          body: JSON.stringify({ rules: nextRules }),
+        });
+        await fetchJson<{
+          processed: number;
+          updated: number;
+          processed_today?: number;
+          updated_today?: number;
+          background_started?: boolean;
+          background_queued?: boolean;
+        }>(
+          `${API_BASE_URL}/api/colors/apply-all?provider=${provider}`,
+          { method: "POST" },
+        );
+        lastSyncedRulesRef.current = serialized;
+      } catch (error) {
+        const text = error instanceof Error ? error.message : "알 수 없는 오류";
+        setMessage(text);
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [provider],
+  );
 
-  const onApplyAllColors = async () => {
-    setLoading(true);
-    setMessage("");
-    try {
-      const result = await fetchJson<{ processed: number; updated: number }>(
-        `${API_BASE_URL}/api/colors/apply-all?provider=${provider}`,
-        { method: "POST" },
-      );
-      setMessage(`AI 색상 적용 완료: 처리 ${result.processed}, 업데이트 ${result.updated}`);
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "알 수 없는 오류";
-      setMessage(text);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const queueSchemaSync = useCallback(
+    (nextRules: ColorRule[]) => {
+      if (syncTimerRef.current !== null) {
+        window.clearTimeout(syncTimerRef.current);
+      }
+      syncTimerRef.current = window.setTimeout(() => {
+        syncTimerRef.current = null;
+        void syncSchemaRules(nextRules);
+      }, 450);
+    },
+    [syncSchemaRules],
+  );
 
   const addRule = () => {
     const fallbackColor = palette[0] ?? "#a4bdfc";
-    setSchemaRules((prev) => [...prev, { color_hex: fallbackColor, label: "", keywords: [] }]);
+    setSchemaRules((prev) => {
+      const nextIndex = prev.length;
+      const next = [...prev, { color_hex: fallbackColor, label: "새 규칙" }];
+      setSchemaVisualOrder((prevOrder) => {
+        if (prevOrder.length === nextIndex) {
+          return [...prevOrder, nextIndex];
+        }
+        return [...Array.from({ length: nextIndex }, (_, idx) => idx), nextIndex];
+      });
+      queueSchemaSync(next);
+      return next;
+    });
   };
 
   const updateRule = (index: number, updater: (rule: ColorRule) => ColorRule) => {
-    setSchemaRules((prev) => prev.map((rule, idx) => (idx === index ? updater(rule) : rule)));
+    setSchemaRules((prev) => {
+      const next = prev.map((rule, idx) => (idx === index ? updater(rule) : rule));
+      queueSchemaSync(next);
+      return next;
+    });
   };
 
   const removeRule = (index: number) => {
-    setSchemaRules((prev) => prev.filter((_, idx) => idx !== index));
+    setSchemaRules((prev) => {
+      const next = prev.filter((_, idx) => idx !== index);
+      queueSchemaSync(next);
+      return next;
+    });
+    setSchemaVisualOrder((prevOrder) =>
+      prevOrder
+        .filter((idx) => idx !== index)
+        .map((idx) => (idx > index ? idx - 1 : idx)),
+    );
     setOpenPaletteIndex((prev) => {
       if (prev === null) {
         return prev;
@@ -178,6 +238,190 @@ export default function ColorSchemaSettingsPage() {
       return prev;
     });
   };
+
+  const orderedSchemaIndexes = useMemo(() => {
+    if (schemaVisualOrder.length !== schemaRules.length) {
+      return Array.from({ length: schemaRules.length }, (_, idx) => idx);
+    }
+
+    const used = new Set<number>();
+    const normalized: number[] = [];
+    for (const idx of schemaVisualOrder) {
+      if (idx >= 0 && idx < schemaRules.length && !used.has(idx)) {
+        used.add(idx);
+        normalized.push(idx);
+      }
+    }
+    for (let idx = 0; idx < schemaRules.length; idx += 1) {
+      if (!used.has(idx)) {
+        normalized.push(idx);
+      }
+    }
+    return normalized;
+  }, [schemaRules.length, schemaVisualOrder]);
+
+  const moveSchemaVisualItem = (
+    fromVisualIndex: number,
+    toVisualIndex: number,
+    dropPosition: "before" | "after",
+  ) => {
+    const baseOrder = [...orderedSchemaIndexes];
+    if (
+      fromVisualIndex < 0 ||
+      toVisualIndex < 0 ||
+      fromVisualIndex >= baseOrder.length ||
+      toVisualIndex >= baseOrder.length
+    ) {
+      return;
+    }
+
+    let targetInsertIndex = dropPosition === "before" ? toVisualIndex : toVisualIndex + 1;
+    if (fromVisualIndex < targetInsertIndex) {
+      targetInsertIndex -= 1;
+    }
+    if (targetInsertIndex === fromVisualIndex) {
+      return;
+    }
+
+    const [movedRuleIndex] = baseOrder.splice(fromVisualIndex, 1);
+    baseOrder.splice(targetInsertIndex, 0, movedRuleIndex);
+    setSchemaVisualOrder(baseOrder);
+    setRecentlyMovedSchemaRuleIndex(movedRuleIndex);
+
+    if (schemaReorderTimerRef.current !== null) {
+      window.clearTimeout(schemaReorderTimerRef.current);
+    }
+    schemaReorderTimerRef.current = window.setTimeout(() => {
+      setRecentlyMovedSchemaRuleIndex(null);
+      schemaReorderTimerRef.current = null;
+    }, 280);
+  };
+
+  const onSchemaDragStart = (visualIndex: number, event: DragEvent<HTMLElement>) => {
+    setDraggingSchemaVisualIndex(visualIndex);
+    setDragOverSchemaVisualIndex(visualIndex);
+    setDragOverSchemaDropPosition("before");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(visualIndex));
+  };
+
+  const onSchemaDragOver = (visualIndex: number, event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const rect = event.currentTarget.getBoundingClientRect();
+    const nextPosition = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    if (dragOverSchemaVisualIndex !== visualIndex) {
+      setDragOverSchemaVisualIndex(visualIndex);
+    }
+    if (dragOverSchemaDropPosition !== nextPosition) {
+      setDragOverSchemaDropPosition(nextPosition);
+    }
+  };
+
+  const onSchemaDrop = (visualIndex: number, event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    const rawIndex = event.dataTransfer.getData("text/plain");
+    const parsedIndex = Number(rawIndex);
+    const fromVisualIndex = Number.isInteger(parsedIndex)
+      ? parsedIndex
+      : draggingSchemaVisualIndex;
+    if (fromVisualIndex !== null) {
+      moveSchemaVisualItem(fromVisualIndex, visualIndex, dragOverSchemaDropPosition);
+    }
+    setDraggingSchemaVisualIndex(null);
+    setDragOverSchemaVisualIndex(null);
+    setDragOverSchemaDropPosition("before");
+  };
+
+  const onSchemaDragEnd = () => {
+    setDraggingSchemaVisualIndex(null);
+    setDragOverSchemaVisualIndex(null);
+    setDragOverSchemaDropPosition("before");
+  };
+
+  const setSchemaItemRef = (ruleIndex: number) => (element: HTMLDivElement | null) => {
+    if (element) {
+      schemaItemRefs.current.set(ruleIndex, element);
+      return;
+    }
+    schemaItemRefs.current.delete(ruleIndex);
+  };
+
+  useLayoutEffect(() => {
+    const nextTops = new Map<number, number>();
+    const computeFlipDurationMs = (distancePx: number) => {
+      const absDistance = Math.abs(distancePx);
+      return Math.min(420, Math.max(140, Math.round(130 + absDistance * 0.9)));
+    };
+    const draggingRuleIndex =
+      draggingSchemaVisualIndex !== null
+        ? orderedSchemaIndexes[draggingSchemaVisualIndex] ?? null
+        : null;
+
+    for (const ruleIndex of orderedSchemaIndexes) {
+      const node = schemaItemRefs.current.get(ruleIndex);
+      if (!node) {
+        continue;
+      }
+
+      const rect = node.getBoundingClientRect();
+      nextTops.set(ruleIndex, rect.top);
+
+      if (draggingRuleIndex === ruleIndex) {
+        continue;
+      }
+
+      const prevTop = previousSchemaItemTopsRef.current.get(ruleIndex);
+      if (prevTop === undefined) {
+        continue;
+      }
+
+      const deltaY = prevTop - rect.top;
+      if (Math.abs(deltaY) < 1) {
+        continue;
+      }
+
+      const activeTimer = schemaFlipResetTimersRef.current.get(ruleIndex);
+      if (activeTimer !== undefined) {
+        window.clearTimeout(activeTimer);
+      }
+
+      node.style.transition = "none";
+      node.style.transform = `translateY(${deltaY}px)`;
+      node.style.willChange = "transform";
+      node.getBoundingClientRect();
+      const durationMs = computeFlipDurationMs(deltaY);
+      node.style.transition = `transform ${durationMs}ms cubic-bezier(0.22, 0.8, 0.2, 1)`;
+      node.style.transform = "";
+
+      const resetTimer = window.setTimeout(() => {
+        const currentNode = schemaItemRefs.current.get(ruleIndex);
+        if (currentNode) {
+          currentNode.style.transition = "";
+          currentNode.style.willChange = "";
+        }
+        schemaFlipResetTimersRef.current.delete(ruleIndex);
+      }, durationMs + 70);
+      schemaFlipResetTimersRef.current.set(ruleIndex, resetTimer);
+    }
+
+    previousSchemaItemTopsRef.current = nextTops;
+  }, [orderedSchemaIndexes, draggingSchemaVisualIndex]);
+
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current !== null) {
+        window.clearTimeout(syncTimerRef.current);
+      }
+      if (schemaReorderTimerRef.current !== null) {
+        window.clearTimeout(schemaReorderTimerRef.current);
+      }
+      for (const timerId of schemaFlipResetTimersRef.current.values()) {
+        window.clearTimeout(timerId);
+      }
+      schemaFlipResetTimersRef.current.clear();
+    };
+  }, []);
 
   const onProviderChange = (nextProvider: string) => {
     const normalized = nextProvider === "apple" ? "apple" : "google";
@@ -213,12 +457,9 @@ export default function ColorSchemaSettingsPage() {
             <button onClick={addRule} disabled={loading || !hasEventColorSupport}>
               규칙 추가
             </button>
-            <button onClick={() => void onSaveSchema()} disabled={loading}>
-              스키마 저장
-            </button>
-            <button onClick={() => void onApplyAllColors()} disabled={loading || !hasEventColorSupport}>
-              전체 일정에 적용
-            </button>
+            <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
+              {syncing ? "변경사항 자동 저장/적용 중..." : "변경사항은 자동 저장/적용됩니다."}
+            </span>
           </div>
 
           <p className="settings-hint">
@@ -227,16 +468,37 @@ export default function ColorSchemaSettingsPage() {
           {message ? <p className="notice">{message}</p> : null}
 
           <div className="schema-list">
-            {schemaRules.map((rule, index) => (
-              <div className="schema-item" key={`${rule.color_hex}-${index}`}>
+            {orderedSchemaIndexes.map((ruleIndex, visualIndex) => {
+              const rule = schemaRules[ruleIndex];
+              if (!rule) {
+                return null;
+              }
+              return (
+              <div
+                className={`schema-item${dragOverSchemaVisualIndex === visualIndex ? ` drag-over drag-over-${dragOverSchemaDropPosition}` : ""}${draggingSchemaVisualIndex === visualIndex ? " dragging" : ""}${recentlyMovedSchemaRuleIndex === ruleIndex ? " reordered" : ""}`}
+                key={`${rule.color_hex}-${ruleIndex}`}
+                ref={setSchemaItemRef(ruleIndex)}
+                onDragOver={(event) => onSchemaDragOver(visualIndex, event)}
+                onDrop={(event) => onSchemaDrop(visualIndex, event)}
+              >
+                <span
+                  className="schema-drag-handle"
+                  draggable
+                  onDragStart={(event) => onSchemaDragStart(visualIndex, event)}
+                  onDragEnd={onSchemaDragEnd}
+                  title="드래그하여 순서 변경"
+                  aria-label="드래그하여 순서 변경"
+                >
+                  ⋮⋮
+                </span>
                 <div className="color-picker-cell">
                   <button
                     type="button"
                     className="color-trigger"
                     onClick={() =>
-                      setOpenPaletteIndex((prev) => (prev === index ? null : index))
+                      setOpenPaletteIndex((prev) => (prev === ruleIndex ? null : ruleIndex))
                     }
-                    aria-expanded={openPaletteIndex === index}
+                    aria-expanded={openPaletteIndex === ruleIndex}
                     aria-label="색상 팔레트 열기"
                   >
                     <span
@@ -245,20 +507,20 @@ export default function ColorSchemaSettingsPage() {
                       title={rule.color_hex}
                     />
                   </button>
-                  {openPaletteIndex === index ? (
+                  {openPaletteIndex === ruleIndex ? (
                     <div className="color-choice-grid">
                       {palette.map((color) => {
                         const selected = color === rule.color_hex;
                         return (
                           <button
-                            key={`${index}-${color}`}
+                            key={`${ruleIndex}-${color}`}
                             type="button"
                             className={`color-choice ${selected ? "selected" : ""}`}
                             style={{ backgroundColor: color }}
                             aria-label={`${color} 선택`}
                             title={color}
                             onClick={() => {
-                              updateRule(index, (prev) => ({ ...prev, color_hex: color }));
+                              updateRule(ruleIndex, (prev) => ({ ...prev, color_hex: color }));
                               setOpenPaletteIndex(null);
                             }}
                           />
@@ -272,34 +534,21 @@ export default function ColorSchemaSettingsPage() {
                   value={rule.label}
                   placeholder="카테고리 라벨"
                   onChange={(e) =>
-                    updateRule(index, (prev) => ({ ...prev, label: e.target.value }))
-                  }
-                />
-                <input
-                  className="schema-keyword-input"
-                  value={rule.keywords.join(", ")}
-                  placeholder="키워드1, 키워드2"
-                  onChange={(e) =>
-                    updateRule(index, (prev) => ({
-                      ...prev,
-                      keywords: e.target.value
-                        .split(",")
-                        .map((kw) => kw.trim().toLowerCase())
-                        .filter(Boolean),
-                    }))
+                    updateRule(ruleIndex, (prev) => ({ ...prev, label: e.target.value }))
                   }
                 />
                 <button
                   type="button"
                   className="schema-remove-btn"
-                  onClick={() => removeRule(index)}
+                  onClick={() => removeRule(ruleIndex)}
                   aria-label="규칙 삭제"
                   title="삭제"
                 >
                   ×
                 </button>
               </div>
-            ))}
+              );
+            })}
             {!schemaRules.length ? <p>아직 저장된 색상 규칙이 없습니다.</p> : null}
           </div>
         </section>

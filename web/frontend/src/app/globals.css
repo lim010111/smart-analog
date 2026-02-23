@@ -635,9 +635,91 @@ textarea {
 
 .schema-item {
   display: grid;
-  grid-template-columns: 36px minmax(140px, 0.8fr) minmax(0, 1fr) 36px;
+  grid-template-columns: 20px 36px minmax(140px, 0.8fr) minmax(0, 1fr) 36px;
   gap: 12px;
   align-items: center;
+  position: relative;
+  transition:
+    transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.22s ease,
+    border-color 0.22s ease,
+    background-color 0.22s ease,
+    opacity 0.18s ease;
+  will-change: transform;
+}
+
+.schema-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.18);
+}
+
+.schema-item.drag-over {
+  outline: 1px dashed var(--accent);
+  outline-offset: 2px;
+  transform: translateY(-1px) scale(1.005);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--bg-card) 85%, var(--accent) 15%);
+}
+
+.schema-item.drag-over-before::before,
+.schema-item.drag-over-after::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(59, 130, 246, 0) 0%,
+    rgba(59, 130, 246, 1) 16%,
+    rgba(59, 130, 246, 1) 84%,
+    rgba(59, 130, 246, 0) 100%
+  );
+  box-shadow:
+    0 0 0 1px rgba(59, 130, 246, 0.25),
+    0 0 12px rgba(59, 130, 246, 0.35);
+  pointer-events: none;
+  z-index: 3;
+  animation: schema-drop-indicator 380ms ease-in-out infinite alternate;
+}
+
+.schema-item.drag-over-before::before {
+  top: -7px;
+}
+
+.schema-item.drag-over-after::after {
+  bottom: -7px;
+}
+
+@keyframes schema-drop-indicator {
+  0% {
+    opacity: 0.7;
+    transform: scaleX(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+.schema-item.dragging {
+  opacity: 0.55;
+  transform: scale(0.985);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.24);
+}
+
+.schema-item.reordered {
+  animation: schema-item-reordered 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes schema-item-reordered {
+  0% {
+    filter: brightness(1.12);
+  }
+  100% {
+    filter: brightness(1);
+  }
 }
 
 .schema-item select,
@@ -682,7 +764,7 @@ textarea {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  z-index: 10;
+  z-index: 1200;
   display: grid;
   grid-template-columns: repeat(6, 26px);
   gap: 8px;
@@ -695,7 +777,13 @@ textarea {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
 }
 
+.schema-list > .schema-item:nth-last-child(-n + 2) .color-choice-grid {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+
 .color-choice {
+  box-sizing: border-box;
   width: 26px;
   height: 26px;
   border-radius: 50%;
@@ -747,6 +835,46 @@ textarea {
   border-color: rgba(239, 68, 68, 0.5);
 }
 
+.schema-drag-handle {
+  width: auto;
+  height: auto;
+  padding: 0 2px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+  font-size: 0.8rem;
+  line-height: 1;
+  border: none;
+  background: none;
+  transition:
+    transform 0.18s ease,
+    color 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.schema-item:hover .schema-drag-handle {
+  transform: translateY(-1px);
+}
+
+.schema-drag-handle:hover {
+  color: var(--text);
+  transform: translateY(-1px) scale(1.04);
+}
+
+.schema-drag-handle:active {
+  cursor: grabbing;
+  transform: scale(0.94);
+}
+
+.schema-item.dragging .schema-drag-handle {
+  cursor: grabbing;
+  color: var(--text);
+  opacity: 0.95;
+}
+
 .collapsible-wrapper {
   display: grid;
   grid-template-rows: 0fr;
@@ -762,6 +890,10 @@ textarea {
   grid-template-rows: 1fr;
   opacity: 1;
   visibility: visible;
+}
+
+.collapsible-wrapper.expanded .collapsible-inner {
+  overflow: visible;
 }
 
 .collapsible-inner {

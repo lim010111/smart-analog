@@ -1,6 +1,15 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback, type ChangeEvent } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  type ChangeEvent,
+  type DragEvent,
+} from "react";
 import Link from "next/link";
 import "./globals.css";
 
@@ -14,9 +23,10 @@ type ThemeName = "dark" | "light";
 interface WebSettings {
   theme: ThemeName;
   event_opacity: number;
+  clock_opacity: number;
   briefing_enabled: boolean;
   briefing_tts_enabled: boolean;
-  widget_pinned: boolean; // Add this line
+  widget_pinned: boolean;
 }
 
 interface WebEvent {
@@ -31,6 +41,7 @@ interface WebEvent {
 
 interface EventResponse {
   provider: string;
+  date: string;
   count: number;
   events: WebEvent[];
 }
@@ -46,7 +57,6 @@ interface BriefingResponse {
 interface ColorRule {
   color_hex: string;
   label: string;
-  keywords: string[];
 }
 
 interface NaturalParseResult {
@@ -86,7 +96,8 @@ interface HoverInfo {
 
 const defaultSettings: WebSettings = {
   theme: "dark",
-  event_opacity: 150,
+  event_opacity: 60,
+  clock_opacity: 100,
   briefing_enabled: true,
   briefing_tts_enabled: true,
   widget_pinned: false,
@@ -94,6 +105,39 @@ const defaultSettings: WebSettings = {
 
 function asThemeName(val: string | undefined | null): ThemeName {
   return val === "light" ? "light" : "dark";
+}
+
+function clampPercent(value: number): number {
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function opacityByteToPercent(value: number): number {
+  return clampPercent((Math.min(255, Math.max(0, value)) / 255) * 100);
+}
+
+function opacityPercentToByte(value: number): number {
+  return Math.round((clampPercent(value) / 100) * 255);
+}
+
+function toIsoDateLocal(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function shiftDateByDays(isoDate: string, deltaDays: number): string {
+  const parsed = parseEventDate(isoDate);
+  parsed.setDate(parsed.getDate() + deltaDays);
+  return toIsoDateLocal(parsed);
+}
+
+function formatCalendarDateLabel(isoDate: string): string {
+  return parseEventDate(isoDate).toLocaleDateString("ko-KR", {
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -370,7 +414,8 @@ export default function Home() {
   const [briefingLoading, setBriefingLoading] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [message, setMessage] = useState<string>("");
-  const [clockNow, setClockNow] = useState<Date>(new Date());
+  const [clockNow, setClockNow] = useState<Date | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>(toIsoDateLocal(new Date()));
 
   const [naturalText, setNaturalText] = useState("");
   const [, setNaturalResult] = useState<NaturalParseResult | null>(null);
@@ -385,8 +430,20 @@ export default function Home() {
   const [schemaRules, setSchemaRules] = useState<ColorRule[]>([]);
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [schemaSaving, setSchemaSaving] = useState(false);
+  const [schemaApplying, setSchemaApplying] = useState(false);
   const [openPaletteIndex, setOpenPaletteIndex] = useState<number | null>(null);
+  const [schemaVisualOrder, setSchemaVisualOrder] = useState<number[]>([]);
+  const [draggingSchemaVisualIndex, setDraggingSchemaVisualIndex] = useState<number | null>(null);
+  const [dragOverSchemaVisualIndex, setDragOverSchemaVisualIndex] = useState<number | null>(null);
+  const [dragOverSchemaDropPosition, setDragOverSchemaDropPosition] = useState<"before" | "after">("before");
+  const [recentlyMovedSchemaRuleIndex, setRecentlyMovedSchemaRuleIndex] = useState<number | null>(null);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
+  const schemaSyncTimerRef = useRef<number | null>(null);
+  const schemaReorderTimerRef = useRef<number | null>(null);
+  const schemaItemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const previousSchemaItemTopsRef = useRef<Map<number, number>>(new Map());
+  const schemaFlipResetTimersRef = useRef<Map<number, number>>(new Map());
+  const lastSyncedRulesRef = useRef<string>("[]");
 
   const [expandedPanels, setExpandedPanels] = useState<Record<string, boolean>>({
     theme: true,
@@ -396,17 +453,95 @@ export default function Home() {
     setExpandedPanels((prev) => ({ ...prev, [panel]: !prev[panel] }));
   };
 
+  const syncSchemaRules = useCallback(
+    async (nextRules: ColorRule[]) => {
+      const serialized = JSON.stringify(nextRules);
+      if (serialized === lastSyncedRulesRef.current) {
+        return;
+      }
+      setSchemaSaving(true);
+      setSchemaApplying(true);
+      setMessage("");
+      try {
+        await fetchJson(`${API_BASE_URL}/api/colors/schema?provider=${provider}`, {
+          method: "PUT",
+          body: JSON.stringify({ rules: nextRules }),
+        });
+        await fetchJson<{
+          processed: number;
+          updated: number;
+          processed_today?: number;
+          updated_today?: number;
+          background_started?: boolean;
+          background_queued?: boolean;
+        }>(
+          `${API_BASE_URL}/api/colors/apply-all?provider=${provider}`,
+          { method: "POST" },
+        );
+        const refreshed = await fetchJson<EventResponse>(
+          `${API_BASE_URL}/api/events/today?provider=${provider}&max_results=50&date=${selectedDate}`,
+        );
+        setEventsData(refreshed);
+        lastSyncedRulesRef.current = serialized;
+      } catch (error) {
+        const text = error instanceof Error ? error.message : "알 수 없는 오류";
+        setMessage(text);
+      } finally {
+        setSchemaSaving(false);
+        setSchemaApplying(false);
+      }
+    },
+    [provider, selectedDate],
+  );
+
+  const queueSchemaSync = useCallback(
+    (nextRules: ColorRule[]) => {
+      if (schemaSyncTimerRef.current !== null) {
+        window.clearTimeout(schemaSyncTimerRef.current);
+      }
+      schemaSyncTimerRef.current = window.setTimeout(() => {
+        schemaSyncTimerRef.current = null;
+        void syncSchemaRules(nextRules);
+      }, 450);
+    },
+    [syncSchemaRules],
+  );
+
   const addRule = () => {
     const fallbackColor = palette[0] ?? "#a4bdfc";
-    setSchemaRules((prev) => [...prev, { color_hex: fallbackColor, label: "", keywords: [] }]);
+    setSchemaRules((prev) => {
+      const nextIndex = prev.length;
+      const next = [...prev, { color_hex: fallbackColor, label: "새 규칙" }];
+      setSchemaVisualOrder((prevOrder) => {
+        if (prevOrder.length === nextIndex) {
+          return [...prevOrder, nextIndex];
+        }
+        return [...Array.from({ length: nextIndex }, (_, idx) => idx), nextIndex];
+      });
+      queueSchemaSync(next);
+      return next;
+    });
   };
 
   const updateRule = (index: number, updater: (rule: ColorRule) => ColorRule) => {
-    setSchemaRules((prev) => prev.map((rule, idx) => (idx === index ? updater(rule) : rule)));
+    setSchemaRules((prev) => {
+      const next = prev.map((rule, idx) => (idx === index ? updater(rule) : rule));
+      queueSchemaSync(next);
+      return next;
+    });
   };
 
   const removeRule = (index: number) => {
-    setSchemaRules((prev) => prev.filter((_, idx) => idx !== index));
+    setSchemaRules((prev) => {
+      const next = prev.filter((_, idx) => idx !== index);
+      queueSchemaSync(next);
+      return next;
+    });
+    setSchemaVisualOrder((prevOrder) =>
+      prevOrder
+        .filter((idx) => idx !== index)
+        .map((idx) => (idx > index ? idx - 1 : idx)),
+    );
     setOpenPaletteIndex((prev) => {
       if (prev === null) return prev;
       if (prev === index) return null;
@@ -415,22 +550,174 @@ export default function Home() {
     });
   };
 
-  const onSaveSchema = async () => {
-    setSchemaSaving(true);
-    setMessage("");
-    try {
-      await fetchJson(`${API_BASE_URL}/api/colors/schema?provider=${provider}`, {
-        method: "PUT",
-        body: JSON.stringify({ rules: schemaRules }),
-      });
-      setMessage("색상 스키마를 저장했습니다.");
-    } catch (error) {
-      const text = error instanceof Error ? error.message : "알 수 없는 오류";
-      setMessage(text);
-    } finally {
-      setSchemaSaving(false);
+  const orderedSchemaIndexes = useMemo(() => {
+    if (schemaVisualOrder.length !== schemaRules.length) {
+      return Array.from({ length: schemaRules.length }, (_, idx) => idx);
+    }
+
+    const used = new Set<number>();
+    const normalized: number[] = [];
+    for (const idx of schemaVisualOrder) {
+      if (idx >= 0 && idx < schemaRules.length && !used.has(idx)) {
+        used.add(idx);
+        normalized.push(idx);
+      }
+    }
+    for (let idx = 0; idx < schemaRules.length; idx += 1) {
+      if (!used.has(idx)) {
+        normalized.push(idx);
+      }
+    }
+    return normalized;
+  }, [schemaRules.length, schemaVisualOrder]);
+
+  const moveSchemaVisualItem = (
+    fromVisualIndex: number,
+    toVisualIndex: number,
+    dropPosition: "before" | "after",
+  ) => {
+    const baseOrder = [...orderedSchemaIndexes];
+    if (
+      fromVisualIndex < 0 ||
+      toVisualIndex < 0 ||
+      fromVisualIndex >= baseOrder.length ||
+      toVisualIndex >= baseOrder.length
+    ) {
+      return;
+    }
+
+    let targetInsertIndex = dropPosition === "before" ? toVisualIndex : toVisualIndex + 1;
+    if (fromVisualIndex < targetInsertIndex) {
+      targetInsertIndex -= 1;
+    }
+    if (targetInsertIndex === fromVisualIndex) {
+      return;
+    }
+
+    const [movedRuleIndex] = baseOrder.splice(fromVisualIndex, 1);
+    baseOrder.splice(targetInsertIndex, 0, movedRuleIndex);
+    setSchemaVisualOrder(baseOrder);
+    setRecentlyMovedSchemaRuleIndex(movedRuleIndex);
+
+    if (schemaReorderTimerRef.current !== null) {
+      window.clearTimeout(schemaReorderTimerRef.current);
+    }
+    schemaReorderTimerRef.current = window.setTimeout(() => {
+      setRecentlyMovedSchemaRuleIndex(null);
+      schemaReorderTimerRef.current = null;
+    }, 280);
+  };
+
+  const onSchemaDragStart = (visualIndex: number, event: DragEvent<HTMLElement>) => {
+    setDraggingSchemaVisualIndex(visualIndex);
+    setDragOverSchemaVisualIndex(visualIndex);
+    setDragOverSchemaDropPosition("before");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(visualIndex));
+  };
+
+  const onSchemaDragOver = (visualIndex: number, event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const rect = event.currentTarget.getBoundingClientRect();
+    const nextPosition = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    if (dragOverSchemaVisualIndex !== visualIndex) {
+      setDragOverSchemaVisualIndex(visualIndex);
+    }
+    if (dragOverSchemaDropPosition !== nextPosition) {
+      setDragOverSchemaDropPosition(nextPosition);
     }
   };
+
+  const onSchemaDrop = (visualIndex: number, event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    const rawIndex = event.dataTransfer.getData("text/plain");
+    const parsedIndex = Number(rawIndex);
+    const fromVisualIndex = Number.isInteger(parsedIndex)
+      ? parsedIndex
+      : draggingSchemaVisualIndex;
+    if (fromVisualIndex !== null) {
+      moveSchemaVisualItem(fromVisualIndex, visualIndex, dragOverSchemaDropPosition);
+    }
+    setDraggingSchemaVisualIndex(null);
+    setDragOverSchemaVisualIndex(null);
+    setDragOverSchemaDropPosition("before");
+  };
+
+  const onSchemaDragEnd = () => {
+    setDraggingSchemaVisualIndex(null);
+    setDragOverSchemaVisualIndex(null);
+    setDragOverSchemaDropPosition("before");
+  };
+
+  const setSchemaItemRef = (ruleIndex: number) => (element: HTMLDivElement | null) => {
+    if (element) {
+      schemaItemRefs.current.set(ruleIndex, element);
+      return;
+    }
+    schemaItemRefs.current.delete(ruleIndex);
+  };
+
+  useLayoutEffect(() => {
+    const nextTops = new Map<number, number>();
+    const computeFlipDurationMs = (distancePx: number) => {
+      const absDistance = Math.abs(distancePx);
+      return Math.min(420, Math.max(140, Math.round(130 + absDistance * 0.9)));
+    };
+    const draggingRuleIndex =
+      draggingSchemaVisualIndex !== null
+        ? orderedSchemaIndexes[draggingSchemaVisualIndex] ?? null
+        : null;
+
+    for (const ruleIndex of orderedSchemaIndexes) {
+      const node = schemaItemRefs.current.get(ruleIndex);
+      if (!node) {
+        continue;
+      }
+
+      const rect = node.getBoundingClientRect();
+      nextTops.set(ruleIndex, rect.top);
+
+      if (draggingRuleIndex === ruleIndex) {
+        continue;
+      }
+
+      const prevTop = previousSchemaItemTopsRef.current.get(ruleIndex);
+      if (prevTop === undefined) {
+        continue;
+      }
+
+      const deltaY = prevTop - rect.top;
+      if (Math.abs(deltaY) < 1) {
+        continue;
+      }
+
+      const activeTimer = schemaFlipResetTimersRef.current.get(ruleIndex);
+      if (activeTimer !== undefined) {
+        window.clearTimeout(activeTimer);
+      }
+
+      node.style.transition = "none";
+      node.style.transform = `translateY(${deltaY}px)`;
+      node.style.willChange = "transform";
+      node.getBoundingClientRect();
+      const durationMs = computeFlipDurationMs(deltaY);
+      node.style.transition = `transform ${durationMs}ms cubic-bezier(0.22, 0.8, 0.2, 1)`;
+      node.style.transform = "";
+
+      const resetTimer = window.setTimeout(() => {
+        const currentNode = schemaItemRefs.current.get(ruleIndex);
+        if (currentNode) {
+          currentNode.style.transition = "";
+          currentNode.style.willChange = "";
+        }
+        schemaFlipResetTimersRef.current.delete(ruleIndex);
+      }, durationMs + 70);
+      schemaFlipResetTimersRef.current.set(ruleIndex, resetTimer);
+    }
+
+    previousSchemaItemTopsRef.current = nextTops;
+  }, [orderedSchemaIndexes, draggingSchemaVisualIndex]);
 
   const clockRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -440,7 +727,8 @@ export default function Home() {
     const data = await fetchJson<WebSettings>(`${API_BASE_URL}/api/settings`);
     setSettings({
       theme: asThemeName(data.theme),
-      event_opacity: Number(data.event_opacity ?? 150),
+      event_opacity: opacityByteToPercent(Number(data.event_opacity ?? 150)),
+      clock_opacity: Number(data.clock_opacity ?? 100),
       briefing_enabled: Boolean(data.briefing_enabled),
       briefing_tts_enabled: Boolean(data.briefing_tts_enabled),
       widget_pinned: Boolean(data.widget_pinned),
@@ -452,7 +740,8 @@ export default function Home() {
       const normalized: WebSettings = {
         ...next,
         theme: asThemeName(next.theme),
-        event_opacity: Math.min(255, Math.max(0, Math.round(next.event_opacity))),
+        event_opacity: opacityPercentToByte(next.event_opacity),
+        clock_opacity: Math.min(100, Math.max(0, Math.round(next.clock_opacity))),
       };
       const saved = await fetchJson<WebSettings>(`${API_BASE_URL}/api/settings`, {
         method: "PUT",
@@ -460,7 +749,8 @@ export default function Home() {
       });
       setSettings({
         theme: asThemeName(saved.theme),
-        event_opacity: Number(saved.event_opacity ?? 150),
+        event_opacity: opacityByteToPercent(Number(saved.event_opacity ?? 150)),
+        clock_opacity: Number(saved.clock_opacity ?? 100),
         briefing_enabled: Boolean(saved.briefing_enabled),
         briefing_tts_enabled: Boolean(saved.briefing_tts_enabled),
         widget_pinned: Boolean(saved.widget_pinned),
@@ -484,13 +774,13 @@ export default function Home() {
     setEventsLoading(true);
     try {
       const data = await fetchJson<EventResponse>(
-        `${API_BASE_URL}/api/events/today?provider=${provider}&max_results=50`,
+        `${API_BASE_URL}/api/events/today?provider=${provider}&max_results=50&date=${selectedDate}`,
       );
       setEventsData(data);
     } finally {
       setEventsLoading(false);
     }
-  }, [provider]);
+  }, [provider, selectedDate]);
 
   const loadBriefing = useCallback(async () => {
     if (!settings.briefing_enabled) {
@@ -525,16 +815,20 @@ export default function Home() {
       const schemaData = await fetchJson<{ rules: ColorRule[] }>(
         `${API_BASE_URL}/api/colors/schema?provider=${provider}`,
       );
-      setSchemaRules(schemaData.rules ?? []);
+      const rules = schemaData.rules ?? [];
+      setSchemaRules(rules);
+      setSchemaVisualOrder(Array.from({ length: rules.length }, (_, idx) => idx));
+      lastSyncedRulesRef.current = JSON.stringify(rules);
     } finally {
       setSchemaLoading(false);
     }
   }, [provider]);
 
   useEffect(() => {
+    setClockNow(new Date());
     const timer = window.setInterval(() => {
       setClockNow(new Date());
-    }, 100);
+    }, 1000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -570,12 +864,33 @@ export default function Home() {
     const canvas = clockRef.current;
     let animationFrameId: number;
     const renderLoop = () => {
-      drawClock(canvas, eventsData.events, new Date(), settings.theme, settings.event_opacity);
+      drawClock(
+        canvas,
+        eventsData.events,
+        new Date(),
+        settings.theme,
+        opacityPercentToByte(settings.event_opacity),
+      );
       animationFrameId = requestAnimationFrame(renderLoop);
     };
     renderLoop();
     return () => cancelAnimationFrame(animationFrameId);
   }, [eventsData, settings.theme, settings.event_opacity]);
+
+  useEffect(() => {
+    return () => {
+      if (schemaSyncTimerRef.current !== null) {
+        window.clearTimeout(schemaSyncTimerRef.current);
+      }
+      if (schemaReorderTimerRef.current !== null) {
+        window.clearTimeout(schemaReorderTimerRef.current);
+      }
+      for (const timerId of schemaFlipResetTimersRef.current.values()) {
+        window.clearTimeout(timerId);
+      }
+      schemaFlipResetTimersRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
@@ -605,6 +920,11 @@ export default function Home() {
       if (key === "event_opacity") {
         setSettings((prev) => ({ ...prev, event_opacity: val as number }));
         await saveSettings({ ...settings, event_opacity: val as number });
+        return;
+      }
+      if (key === "clock_opacity") {
+        setSettings((prev) => ({ ...prev, clock_opacity: val as number }));
+        await saveSettings({ ...settings, clock_opacity: val as number });
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -892,6 +1212,18 @@ export default function Home() {
     setHoverInfo(null);
   };
 
+  const todayIsoDate = toIsoDateLocal(clockNow ?? new Date());
+  const isTodaySelected = selectedDate === todayIsoDate;
+  const clockNowText = clockNow ? clockNow.toLocaleTimeString("ko-KR") : "--:--:--";
+
+  const moveSelectedDate = (deltaDays: number) => {
+    setSelectedDate((prev) => shiftDateByDays(prev, deltaDays));
+  };
+
+  const resetToToday = () => {
+    setSelectedDate(todayIsoDate);
+  };
+
   const rootClass = settings.theme === "light" ? "theme-light" : "theme-dark";
 
   return (
@@ -902,16 +1234,34 @@ export default function Home() {
           <section className={`panel clock-main-panel ${settings.widget_pinned ? "pinned" : ""}`}>
             <div className="hero-header">
               <p className="eyebrow">Smart Analog</p>
-              <h1>하루 일정을 시계 위에서 직관적으로 확인하세요.</h1>
             </div>
             {message && <p className="notice">{message}</p>}
 
             <header className="panel-head clock-main-head">
-              <small>{clockNow.toLocaleTimeString("ko-KR")}</small>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button type="button" onClick={() => moveSelectedDate(-1)} aria-label="이전 날짜">
+                  &lt;
+                </button>
+                <button type="button" onClick={() => moveSelectedDate(1)} aria-label="다음 날짜">
+                  &gt;
+                </button>
+                <button type="button" onClick={resetToToday} disabled={isTodaySelected}>
+                  Today
+                </button>
+              </div>
+              <small>
+                {formatCalendarDateLabel(selectedDate)} · {clockNowText}
+              </small>
             </header>
 
             <div className="clock-wrapper" onMouseMove={handleClockMouseMove} onMouseLeave={handleClockMouseLeave}>
-              <canvas ref={clockRef} width={CLOCK_SIZE} height={CLOCK_SIZE} className="clock-canvas" />
+              <canvas
+                ref={clockRef}
+                width={CLOCK_SIZE}
+                height={CLOCK_SIZE}
+                className="clock-canvas"
+                style={{ opacity: Math.max(0, Math.min(1, settings.clock_opacity / 100)) }}
+              />
               {hoverInfo && (
                 <div
                   className="event-tooltip"
@@ -934,12 +1284,22 @@ export default function Home() {
             <section className="panel briefing-panel" style={{ flex: 1 }}>
               <header className="panel-head">
                 <h2>오늘의 브리핑</h2>
-                <button
-                  onClick={() => void onSpeakBriefing()}
-                  disabled={!settings.briefing_tts_enabled || !briefingData?.briefing}
-                >
-                  {settings.briefing_tts_enabled ? "읽어주기" : "TTS 꺼짐"}
-                </button>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <button
+                    onClick={() => void loadBriefing()}
+                    disabled={briefingLoading || !settings.briefing_enabled}
+                    style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+                  >
+                    {briefingLoading ? "생성 중..." : "오늘의 브리핑 생성"}
+                  </button>
+                  <button
+                    onClick={() => void onSpeakBriefing()}
+                    disabled={!settings.briefing_tts_enabled || !briefingData?.briefing}
+                    style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+                  >
+                    {settings.briefing_tts_enabled ? "읽어주기" : "TTS 꺼짐"}
+                  </button>
+                </div>
               </header>
               
               <div className="panel-content">
@@ -995,27 +1355,30 @@ export default function Home() {
                 </select>
               </label>
               <label>
-                일정 투명도 ({settings.event_opacity})
+                일정 투명도 ({settings.event_opacity}%)
                 <input
                   type="range"
                   min={0}
-                  max={255}
+                  max={100}
                   value={settings.event_opacity}
                   onChange={(e) => {
                     void updateSetting("event_opacity", Number(e.target.value));
                   }}
                 />
               </label>
+              <label>
+                시계 투명도 ({settings.clock_opacity}%)
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={settings.clock_opacity}
+                  onChange={(e) => {
+                    void updateSetting("clock_opacity", Number(e.target.value));
+                  }}
+                />
+              </label>
 
-              <button
-                onClick={() => void loadBriefing()}
-                disabled={briefingLoading || !settings.briefing_enabled}
-              >
-                {briefingLoading ? "생성 중..." : "브리핑 생성"}
-              </button>
-              <button onClick={() => void loadColorState()} disabled={schemaLoading}>
-                {schemaLoading ? "동기화 중..." : "색상 스키마 동기화"}
-              </button>
               {providerAuthenticated ? (
                 <button onClick={() => void onLogoutProvider()}>계정 연결 해제</button>
               ) : (
@@ -1131,34 +1494,56 @@ export default function Home() {
                 <div className="panel-content-wrapper" style={{ marginTop: '16px' }}>
                 <div className="schema-entry-card" style={{ padding: '0', border: 'none', background: 'transparent', boxShadow: 'none' }}>
                   <div className="row-actions" style={{ marginBottom: '12px' }}>
-                    <button onClick={addRule} disabled={schemaLoading || schemaSaving || !hasEventColorSupport}>
+                    <button onClick={addRule} disabled={schemaLoading || schemaSaving || schemaApplying || !hasEventColorSupport}>
                       규칙 추가
                     </button>
-                    <button onClick={() => void onSaveSchema()} disabled={schemaLoading || schemaSaving}>
-                      {schemaSaving ? "저장 중..." : "저장"}
-                    </button>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
+                      {schemaSaving || schemaApplying ? "변경사항 자동 저장/적용 중..." : "변경사항은 자동 저장/적용됩니다."}
+                    </span>
                   </div>
                   <div className="schema-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {schemaRules.map((rule, index) => (
-                      <div className="schema-item" key={`${rule.color_hex}-${index}`} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '8px', alignItems: 'center', background: 'var(--bg-card)', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                    {orderedSchemaIndexes.map((ruleIndex, visualIndex) => {
+                      const rule = schemaRules[ruleIndex];
+                      if (!rule) {
+                        return null;
+                      }
+                      return (
+                      <div
+                        className={`schema-item${dragOverSchemaVisualIndex === visualIndex ? ` drag-over drag-over-${dragOverSchemaDropPosition}` : ''}${draggingSchemaVisualIndex === visualIndex ? ' dragging' : ''}${recentlyMovedSchemaRuleIndex === ruleIndex ? ' reordered' : ''}`}
+                        key={`${rule.color_hex}-${ruleIndex}`}
+                        ref={setSchemaItemRef(ruleIndex)}
+                        style={{ display: 'grid', gridTemplateColumns: '20px auto 1fr auto', gap: '8px', alignItems: 'center', background: 'var(--bg-card)', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)' }}
+                        onDragOver={(event) => onSchemaDragOver(visualIndex, event)}
+                        onDrop={(event) => onSchemaDrop(visualIndex, event)}
+                      >
+                        <span
+                          className="schema-drag-handle"
+                          draggable
+                          onDragStart={(event) => onSchemaDragStart(visualIndex, event)}
+                          onDragEnd={onSchemaDragEnd}
+                          title="드래그하여 순서 변경"
+                          aria-label="드래그하여 순서 변경"
+                        >
+                          ⋮⋮
+                        </span>
                         <div className="color-picker-cell" style={{ position: 'relative' }}>
                           <button
                             type="button"
                             className="color-trigger"
                             style={{ width: '24px', height: '24px', minWidth: '24px' }}
-                            onClick={() => setOpenPaletteIndex(prev => prev === index ? null : index)}
+                            onClick={() => setOpenPaletteIndex(prev => prev === ruleIndex ? null : ruleIndex)}
                           >
                             <span className="color-preview" style={{ width: '16px', height: '16px', backgroundColor: rule.color_hex || "#64748b" }} />
                           </button>
-                          {openPaletteIndex === index && (
-                            <div className="color-choice-grid" style={{ zIndex: 100, width: 'max-content', maxWidth: '200px' }}>
+                          {openPaletteIndex === ruleIndex && (
+                            <div className="color-choice-grid" style={{ zIndex: 1200 }}>
                               {palette.map((color) => (
                                 <button
-                                  key={`${index}-${color}`}
+                                  key={`${ruleIndex}-${color}`}
                                   type="button"
                                   className={`color-choice ${color === rule.color_hex ? "selected" : ""}`}
                                   style={{ backgroundColor: color }}
-                                  onClick={() => { updateRule(index, (p) => ({ ...p, color_hex: color })); setOpenPaletteIndex(null); }}
+                                  onClick={() => { updateRule(ruleIndex, (p) => ({ ...p, color_hex: color })); setOpenPaletteIndex(null); }}
                                 />
                               ))}
                             </div>
@@ -1169,28 +1554,20 @@ export default function Home() {
                             style={{ fontSize: '0.8rem', padding: '4px 8px' }}
                             value={rule.label}
                             placeholder="라벨"
-                            onChange={(e) => updateRule(index, (p) => ({ ...p, label: e.target.value }))}
-                          />
-                          <input
-                            style={{ fontSize: '0.8rem', padding: '4px 8px' }}
-                            value={rule.keywords.join(", ")}
-                            placeholder="키워드1, 키워드2"
-                            onChange={(e) => updateRule(index, (p) => ({
-                              ...p,
-                              keywords: e.target.value.split(",").map(k => k.trim().toLowerCase()).filter(Boolean)
-                            }))}
+                            onChange={(e) => updateRule(ruleIndex, (p) => ({ ...p, label: e.target.value }))}
                           />
                         </div>
                         <button
                           type="button"
                           className="schema-remove-btn"
                           style={{ width: '24px', height: '24px', minWidth: '24px', fontSize: '14px' }}
-                          onClick={() => removeRule(index)}
+                          onClick={() => removeRule(ruleIndex)}
                         >
                           ×
                         </button>
                       </div>
-                    ))}
+                      );
+                    })}
                     {!schemaRules.length && <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>규칙이 없습니다.</p>}
                   </div>
                 </div>
