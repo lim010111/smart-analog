@@ -49,6 +49,47 @@ class WebEvent:
     provider_color_id: str | None
 
 
+class ProvidersResponse(BaseModel):
+    default_provider: str
+    providers: list[str]
+
+
+class ProviderStatusResponse(BaseModel):
+    provider: str
+    authenticated: bool
+
+
+class GoogleAuthUrlResponse(BaseModel):
+    provider: str
+    auth_url: str
+    state: str
+    redirect_uri: str
+    client_id: str
+
+
+class AppleCredentialsResponse(BaseModel):
+    provider: str
+    authenticated: bool
+
+
+class WebEventResponse(BaseModel):
+    id: str
+    summary: str
+    description: str
+    start_time: str
+    end_time: str
+    all_day: bool
+    color_hex: str
+    provider_color_id: str | None = None
+
+
+class TodayEventsResponse(BaseModel):
+    provider: str
+    date: str
+    count: int
+    events: list[WebEventResponse]
+
+
 class NaturalInputRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
 
@@ -728,18 +769,18 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/providers")
-def providers() -> dict[str, object]:
-    return {
-        "default_provider": os.getenv("WEB_DEFAULT_PROVIDER", "google"),
-        "providers": ["google", "apple"],
-    }
+@app.get("/api/providers", response_model=ProvidersResponse)
+def providers() -> ProvidersResponse:
+    return ProvidersResponse(
+        default_provider=os.getenv("WEB_DEFAULT_PROVIDER", "google"),
+        providers=["google", "apple"],
+    )
 
 
-@app.get("/api/providers/status")
+@app.get("/api/providers/status", response_model=ProviderStatusResponse)
 def provider_status(
     provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
-) -> dict[str, object]:
+) -> ProviderStatusResponse:
     try:
         calendar = _build_calendar_service(provider)
         active = calendar.active_provider
@@ -752,10 +793,7 @@ def provider_status(
             authenticated = False
     except Exception:
         authenticated = False
-    return {
-        "provider": provider,
-        "authenticated": authenticated,
-    }
+    return ProviderStatusResponse(provider=provider, authenticated=authenticated)
 
 
 @app.post("/api/providers/authenticate")
@@ -779,11 +817,11 @@ def authenticate_provider(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@app.post("/api/providers/google/auth-url")
+@app.post("/api/providers/google/auth-url", response_model=GoogleAuthUrlResponse)
 def google_auth_url(
     request: Request,
     mobile_callback: str | None = Query(default=None),
-) -> dict[str, object]:
+) -> GoogleAuthUrlResponse:
     _cleanup_google_oauth_pending()
 
     redirect_uri = _build_google_redirect_uri(request)
@@ -807,13 +845,13 @@ def google_auth_url(
         mobile_callback=mobile_callback_uri,
     )
 
-    return {
-        "provider": "google",
-        "auth_url": auth_url,
-        "state": state,
-        "redirect_uri": redirect_uri,
-        "client_id": client_id,
-    }
+    return GoogleAuthUrlResponse(
+        provider="google",
+        auth_url=auth_url,
+        state=state,
+        redirect_uri=redirect_uri,
+        client_id=client_id,
+    )
 
 
 @app.get("/api/providers/google/callback")
@@ -928,8 +966,8 @@ def google_auth_callback(
     )
 
 
-@app.post("/api/providers/apple/credentials")
-def set_apple_credentials(request: AppleCredentialsRequest) -> dict[str, object]:
+@app.post("/api/providers/apple/credentials", response_model=AppleCredentialsResponse)
+def set_apple_credentials(request: AppleCredentialsRequest) -> AppleCredentialsResponse:
     try:
         calendar = _build_calendar_service("apple")
         provider = calendar.active_provider
@@ -939,10 +977,7 @@ def set_apple_credentials(request: AppleCredentialsRequest) -> dict[str, object]
             )
         provider.set_credentials(request.apple_id, request.app_password)
         provider.authenticate()
-        return {
-            "provider": "apple",
-            "authenticated": True,
-        }
+        return AppleCredentialsResponse(provider="apple", authenticated=True)
     except HTTPException:
         raise
     except Exception as error:
@@ -987,12 +1022,12 @@ def update_settings(request: WebSettingsRequest) -> dict[str, object]:
     return get_settings()
 
 
-@app.get("/api/events/today")
+@app.get("/api/events/today", response_model=TodayEventsResponse)
 def today_events(
     provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
     max_results: int = Query(default=20, ge=1, le=200),
     date: str | None = Query(default=None),
-) -> dict[str, object]:
+) -> TodayEventsResponse:
     target_date = dt.datetime.now().astimezone().date()
     if date:
         try:
@@ -1021,13 +1056,13 @@ def today_events(
             calendar.ai_event_color_service.apply(events)
             active_provider.write_event_colors(events)
 
-        payload = [asdict(_to_web_event(event)) for event in events]
-        return {
-            "provider": provider,
-            "date": target_date.isoformat(),
-            "count": len(payload),
-            "events": payload,
-        }
+        payload = [WebEventResponse(**asdict(_to_web_event(event))) for event in events]
+        return TodayEventsResponse(
+            provider=provider,
+            date=target_date.isoformat(),
+            count=len(payload),
+            events=payload,
+        )
     except HTTPException:
         raise
     except ValueError as error:
