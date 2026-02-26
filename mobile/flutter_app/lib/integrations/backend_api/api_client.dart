@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'dto/apple_credentials_response_dto.dart';
 import 'dto/google_auth_url_response_dto.dart';
 import 'dto/provider_status_dto.dart';
 import 'dto/providers_response_dto.dart';
@@ -67,6 +68,24 @@ class BackendApiClient {
     return GoogleAuthUrlResponseDto.fromJson(decoded);
   }
 
+  Future<AppleCredentialsResponseDto> setAppleCredentials({
+    required String appleId,
+    required String appPassword,
+  }) async {
+    final uri = _buildUri(
+      '/api/providers/apple/credentials',
+      const <String, String>{},
+    );
+    final decoded = await _postJsonObject(
+      uri,
+      jsonBody: <String, dynamic>{
+        'apple_id': appleId,
+        'app_password': appPassword,
+      },
+    );
+    return AppleCredentialsResponseDto.fromJson(decoded);
+  }
+
   Future<Map<String, dynamic>> _getJsonObject(Uri uri) async {
     final response = await _httpClient
         .get(uri)
@@ -88,9 +107,19 @@ class BackendApiClient {
     return decoded;
   }
 
-  Future<Map<String, dynamic>> _postJsonObject(Uri uri) async {
+  Future<Map<String, dynamic>> _postJsonObject(
+    Uri uri, {
+    Map<String, dynamic>? jsonBody,
+  }) async {
+    final payload = jsonBody == null ? null : jsonEncode(jsonBody);
     final response = await _httpClient
-        .post(uri)
+        .post(
+          uri,
+          headers: payload == null
+              ? const <String, String>{}
+              : const <String, String>{'Content-Type': 'application/json'},
+          body: payload,
+        )
         .timeout(const Duration(seconds: 8));
 
     final status = response.statusCode;

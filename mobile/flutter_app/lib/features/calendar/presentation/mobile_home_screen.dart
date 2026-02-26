@@ -32,6 +32,10 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   String? _googleRedirectUri;
   Timer? _authStatusPollTimer;
   int _authStatusPollAttempts = 0;
+  final TextEditingController _appleIdController = TextEditingController();
+  final TextEditingController _applePasswordController =
+      TextEditingController();
+  bool _appleCredentialBusy = false;
 
   @override
   void initState() {
@@ -47,6 +51,8 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _authStatusPollTimer?.cancel();
+    _appleIdController.dispose();
+    _applePasswordController.dispose();
     _eventsRepository.dispose();
     super.dispose();
   }
@@ -157,6 +163,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
     setState(() {
       _selectedProvider = value;
+      _googleRedirectUri = null;
       _snapshotFuture = _reloadForProvider(value);
     });
   }
@@ -221,6 +228,55 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
   Future<void> _refreshAuthOnly() async {
     await _refreshAuthStatusAndMaybeReload();
+  }
+
+  Future<void> _submitAppleCredentials() async {
+    final appleId = _appleIdController.text.trim();
+    final appPassword = _applePasswordController.text.trim();
+    if (appleId.isEmpty || appPassword.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter Apple ID and app-specific password.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _appleCredentialBusy = true;
+    });
+
+    try {
+      final response = await _eventsRepository.setAppleCredentials(
+        appleId: appleId,
+        appPassword: appPassword,
+      );
+      _applePasswordController.clear();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              response.authenticated
+                  ? 'Apple credentials saved and authenticated.'
+                  : 'Apple credentials saved. Verify auth status.',
+            ),
+          ),
+        );
+      }
+      await _refreshAuthStatusAndMaybeReload();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Apple credential save failed: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _appleCredentialBusy = false;
+        });
+      }
+    }
   }
 
   void _startAuthStatusPolling() {
@@ -337,6 +393,53 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
                       _authFlowBusy
                           ? 'Starting Google sign-in...'
                           : 'Start Google Sign-in',
+                    ),
+                  ),
+                ),
+              if (_selectedProvider == 'apple' &&
+                  _providerAuthenticated != true)
+                Card(
+                  margin: const EdgeInsets.only(top: 8),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Apple credentials (app-specific password)'),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _appleIdController,
+                          keyboardType: TextInputType.emailAddress,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: const InputDecoration(
+                            labelText: 'Apple ID',
+                            hintText: 'name@example.com',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _applePasswordController,
+                          obscureText: true,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: const InputDecoration(
+                            labelText: 'App-specific password',
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        FilledButton.icon(
+                          onPressed: _appleCredentialBusy
+                              ? null
+                              : _submitAppleCredentials,
+                          icon: const Icon(Icons.lock_open),
+                          label: Text(
+                            _appleCredentialBusy
+                                ? 'Saving Apple credentials...'
+                                : 'Save Apple credentials',
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),

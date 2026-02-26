@@ -1,4 +1,5 @@
 import '../../../integrations/backend_api/api_client.dart';
+import '../../../integrations/backend_api/dto/apple_credentials_response_dto.dart';
 import '../../../integrations/backend_api/dto/google_auth_url_response_dto.dart';
 import '../../../integrations/backend_api/dto/provider_status_dto.dart';
 import '../../../integrations/backend_api/dto/providers_response_dto.dart';
@@ -48,6 +49,16 @@ class CalendarEventsRepository {
 
   Future<GoogleAuthUrlResponseDto> fetchGoogleAuthUrl() {
     return _apiClient.fetchGoogleAuthUrl();
+  }
+
+  Future<AppleCredentialsResponseDto> setAppleCredentials({
+    required String appleId,
+    required String appPassword,
+  }) {
+    return _apiClient.setAppleCredentials(
+      appleId: appleId,
+      appPassword: appPassword,
+    );
   }
 
   void dispose() {
