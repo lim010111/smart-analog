@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -16,7 +18,8 @@ class MobileHomeScreen extends StatefulWidget {
   State<MobileHomeScreen> createState() => _MobileHomeScreenState();
 }
 
-class _MobileHomeScreenState extends State<MobileHomeScreen> {
+class _MobileHomeScreenState extends State<MobileHomeScreen>
+    with WidgetsBindingObserver {
   late final WidgetSnapshotStore _snapshotStore;
   late final CalendarEventsRepository _eventsRepository;
   late Future<WidgetSnapshot> _snapshotFuture;
@@ -27,10 +30,13 @@ class _MobileHomeScreenState extends State<MobileHomeScreen> {
   bool? _providerAuthenticated;
   bool _authFlowBusy = false;
   String? _googleRedirectUri;
+  Timer? _authStatusPollTimer;
+  int _authStatusPollAttempts = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _snapshotStore = FileWidgetSnapshotStore();
     final apiClient = BackendApiClient(baseUrl: BackendConfig.resolveBaseUrl());
     _eventsRepository = CalendarEventsRepository(apiClient: apiClient);
@@ -39,8 +45,19 @@ class _MobileHomeScreenState extends State<MobileHomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _authStatusPollTimer?.cancel();
     _eventsRepository.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      return;
+    }
+
+    _refreshAuthStatusAndMaybeReload();
   }
 
   Future<WidgetSnapshot> _bootstrapLoad() async {
@@ -178,6 +195,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen> {
           ),
         );
       } else if (mounted) {
+        _startAuthStatusPolling();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -202,10 +220,41 @@ class _MobileHomeScreenState extends State<MobileHomeScreen> {
   }
 
   Future<void> _refreshAuthOnly() async {
+    await _refreshAuthStatusAndMaybeReload();
+  }
+
+  void _startAuthStatusPolling() {
+    _authStatusPollTimer?.cancel();
+    _authStatusPollAttempts = 0;
+    _authStatusPollTimer = Timer.periodic(const Duration(seconds: 3), (
+      timer,
+    ) async {
+      _authStatusPollAttempts += 1;
+      final refreshed = await _refreshAuthStatusAndMaybeReload();
+      if (refreshed || _authStatusPollAttempts >= 20) {
+        timer.cancel();
+      }
+    });
+  }
+
+  Future<bool> _refreshAuthStatusAndMaybeReload() async {
+    final previous = _providerAuthenticated;
     await _refreshProviderStatus(provider: _selectedProvider);
-    if (mounted) {
-      setState(() {});
+
+    if (!mounted) {
+      return false;
     }
+
+    final nowAuthenticated = _providerAuthenticated == true;
+    if (previous != true && nowAuthenticated) {
+      setState(() {
+        _snapshotFuture = _reloadForProvider(_selectedProvider);
+      });
+      return true;
+    }
+
+    setState(() {});
+    return false;
   }
 
   List<CalendarEvent> _sampleEvents(DateTime now) {
