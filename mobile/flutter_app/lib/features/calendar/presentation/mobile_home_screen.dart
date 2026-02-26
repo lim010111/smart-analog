@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -21,8 +22,12 @@ class MobileHomeScreen extends StatefulWidget {
 
 class _MobileHomeScreenState extends State<MobileHomeScreen>
     with WidgetsBindingObserver {
+  static const Duration _deepLinkDedupWindow = Duration(seconds: 5);
+  static const Duration _resumeRefreshDebounce = Duration(seconds: 2);
+
   late final WidgetSnapshotStore _snapshotStore;
   late final CalendarEventsRepository _eventsRepository;
+  late final String _backendBaseUrl;
   late Future<WidgetSnapshot> _snapshotFuture;
   String _loadSource = 'cache';
   String _activeProvider = 'google';
@@ -33,9 +38,12 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   String? _googleRedirectUri;
   Timer? _authStatusPollTimer;
   int _authStatusPollAttempts = 0;
+  Future<bool>? _authRefreshInFlight;
   final AppLinks _appLinks = AppLinks();
   StreamSubscription<Uri>? _deepLinkSubscription;
-  String? _lastHandledDeepLink;
+  String? _lastHandledDeepLinkSignature;
+  DateTime? _lastHandledDeepLinkAt;
+  DateTime? _lastLifecycleResumeRefreshAt;
   final TextEditingController _appleIdController = TextEditingController();
   final TextEditingController _applePasswordController =
       TextEditingController();
@@ -46,7 +54,8 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _snapshotStore = FileWidgetSnapshotStore();
-    final apiClient = BackendApiClient(baseUrl: BackendConfig.resolveBaseUrl());
+    _backendBaseUrl = BackendConfig.resolveBaseUrl();
+    final apiClient = BackendApiClient(baseUrl: _backendBaseUrl);
     _eventsRepository = CalendarEventsRepository(apiClient: apiClient);
     _snapshotFuture = _bootstrapLoad();
     _initDeepLinkHandling();
@@ -55,7 +64,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _authStatusPollTimer?.cancel();
+    _stopAuthStatusPolling();
     _deepLinkSubscription?.cancel();
     _appleIdController.dispose();
     _applePasswordController.dispose();
@@ -95,11 +104,19 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
       return;
     }
 
-    final signature = uri.toString();
-    if (_lastHandledDeepLink == signature) {
+    final signature = _deepLinkSignature(uri);
+    final now = DateTime.now();
+    final lastSignature = _lastHandledDeepLinkSignature;
+    final lastHandledAt = _lastHandledDeepLinkAt;
+    if (lastSignature == signature &&
+        lastHandledAt != null &&
+        now.difference(lastHandledAt) < _deepLinkDedupWindow) {
       return;
     }
-    _lastHandledDeepLink = signature;
+    _lastHandledDeepLinkSignature = signature;
+    _lastHandledDeepLinkAt = now;
+
+    _stopAuthStatusPolling();
 
     final status = (uri.queryParameters['status'] ?? '').toLowerCase();
     final message = uri.queryParameters['message'] ?? '';
@@ -126,7 +143,15 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
       return;
     }
 
-    _refreshAuthStatusAndMaybeReload();
+    final now = DateTime.now();
+    final lastRefreshAt = _lastLifecycleResumeRefreshAt;
+    if (lastRefreshAt != null &&
+        now.difference(lastRefreshAt) < _resumeRefreshDebounce) {
+      return;
+    }
+
+    _lastLifecycleResumeRefreshAt = now;
+    unawaited(_refreshAuthStatusAndMaybeReload());
   }
 
   Future<WidgetSnapshot> _bootstrapLoad() async {
@@ -279,7 +304,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Google auth start failed: $error')),
+          SnackBar(content: Text(_googleAuthStartErrorMessage(error))),
         );
       }
     } finally {
@@ -291,8 +316,30 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     }
   }
 
+  String _googleAuthStartErrorMessage(Object error) {
+    if (error is BackendApiException) {
+      return 'Google auth start failed: ${error.message}';
+    }
+    if (error is SocketException ||
+        error is TimeoutException ||
+        error is HttpException) {
+      return 'Google auth start failed: backend unreachable ($_backendBaseUrl). '
+          'For physical Android, run adb reverse tcp:8000 tcp:8000 or set --dart-define=BACKEND_BASE_URL.';
+    }
+    return 'Google auth start failed: $error';
+  }
+
   Future<void> _refreshAuthOnly() async {
     await _refreshAuthStatusAndMaybeReload();
+  }
+
+  String _deepLinkSignature(Uri uri) {
+    final status = (uri.queryParameters['status'] ?? '').trim().toLowerCase();
+    final provider = (uri.queryParameters['provider'] ?? '')
+        .trim()
+        .toLowerCase();
+    final message = (uri.queryParameters['message'] ?? '').trim();
+    return '${uri.scheme.toLowerCase()}|${uri.host.toLowerCase()}|${uri.path.toLowerCase()}|$status|$provider|$message';
   }
 
   Future<void> _submitAppleCredentials() async {
@@ -346,7 +393,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   }
 
   void _startAuthStatusPolling() {
-    _authStatusPollTimer?.cancel();
+    _stopAuthStatusPolling();
     _authStatusPollAttempts = 0;
     _authStatusPollTimer = Timer.periodic(const Duration(seconds: 3), (
       timer,
@@ -359,7 +406,29 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     });
   }
 
+  void _stopAuthStatusPolling() {
+    _authStatusPollTimer?.cancel();
+    _authStatusPollTimer = null;
+  }
+
   Future<bool> _refreshAuthStatusAndMaybeReload() async {
+    final inFlight = _authRefreshInFlight;
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final refreshFuture = _performAuthStatusRefreshAndMaybeReload();
+    _authRefreshInFlight = refreshFuture;
+    try {
+      return await refreshFuture;
+    } finally {
+      if (identical(_authRefreshInFlight, refreshFuture)) {
+        _authRefreshInFlight = null;
+      }
+    }
+  }
+
+  Future<bool> _performAuthStatusRefreshAndMaybeReload() async {
     final previous = _providerAuthenticated;
     await _refreshProviderStatus(provider: _selectedProvider);
 
