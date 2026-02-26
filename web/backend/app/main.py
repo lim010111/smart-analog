@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -95,7 +95,8 @@ WEB_SETTINGS: dict[str, object] = {
     "widget_pinned": True,
 }
 
-GOOGLE_OAUTH_PENDING: dict[str, tuple[str, float]] = {}
+GoogleOAuthPending = dict[str, str | float | None]
+GOOGLE_OAUTH_PENDING: dict[str, GoogleOAuthPending] = {}
 GOOGLE_OAUTH_TTL_SECONDS = 600
 OAUTHLIB_TRANSPORT_LOCK = threading.RLock()
 
@@ -272,8 +273,8 @@ def _cleanup_google_oauth_pending() -> None:
     now = time.time()
     expired = [
         state
-        for state, (_, created_at) in GOOGLE_OAUTH_PENDING.items()
-        if now - created_at > GOOGLE_OAUTH_TTL_SECONDS
+        for state, pending in GOOGLE_OAUTH_PENDING.items()
+        if now - float(pending.get("created_at", 0.0) or 0.0) > GOOGLE_OAUTH_TTL_SECONDS
     ]
     for state in expired:
         GOOGLE_OAUTH_PENDING.pop(state, None)
@@ -330,6 +331,34 @@ def _build_google_redirect_uri(request: Request) -> str:
     if proto == "http" and not _is_localhost_host(host):
         proto = "https"
     return f"{proto}://{host}/api/providers/google/callback"
+
+
+def _normalize_mobile_callback_uri(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    parsed = urlsplit(text)
+    scheme = parsed.scheme.strip().lower()
+    if not scheme:
+        raise HTTPException(
+            status_code=400,
+            detail="mobile_callback URI에 scheme이 필요합니다.",
+        )
+
+    if scheme in {"javascript", "data", "file"}:
+        raise HTTPException(
+            status_code=400,
+            detail="지원하지 않는 mobile_callback URI scheme입니다.",
+        )
+
+    if not parsed.netloc and not parsed.path:
+        raise HTTPException(
+            status_code=400,
+            detail="유효하지 않은 mobile_callback URI입니다.",
+        )
+
+    return text
 
 
 def _normalize_host(raw_host: str) -> str:
@@ -488,6 +517,58 @@ def _google_callback_html(success: bool, message: str) -> str:
         }}
       }} catch (_) {{}}
       setTimeout(function() {{ window.close(); }}, 500);
+    }})();
+  </script>
+</body>
+</html>
+"""
+
+
+def _append_query_params(url: str, params: dict[str, str]) -> str:
+    parsed = urlsplit(url)
+    merged = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    merged.update(params)
+    new_query = urlencode(merged)
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment)
+    )
+
+
+def _google_callback_mobile_redirect_html(
+    callback_url: str,
+    success: bool,
+    message: str,
+) -> str:
+    escaped_message = message.replace("<", "&lt;").replace(">", "&gt;")
+    escaped_callback = callback_url.replace("&", "&amp;").replace('"', "&quot;")
+    return f"""
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Google 인증 결과</title>
+  <style>
+    body {{ font-family: sans-serif; margin: 0; padding: 24px; background: #f7f8fa; color: #121417; }}
+    .box {{ max-width: 560px; margin: 40px auto; padding: 20px; border-radius: 12px; background: #fff; border: 1px solid #e5e8ef; }}
+    .ok {{ color: #0b7a37; }}
+    .fail {{ color: #c22a2a; }}
+    p {{ line-height: 1.5; }}
+    .link {{ display: inline-block; margin-top: 8px; }}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2 class="{"ok" if success else "fail"}">{"인증 완료" if success else "인증 실패"}</h2>
+    <p>{escaped_message}</p>
+    <p>모바일 앱으로 돌아갑니다. 자동 이동이 안 되면 아래 링크를 눌러주세요.</p>
+    <a class="link" href="{escaped_callback}">앱으로 돌아가기</a>
+  </div>
+  <script>
+    (function() {{
+      var target = "{escaped_callback}";
+      setTimeout(function() {{ window.location.href = target; }}, 80);
+      setTimeout(function() {{ window.close(); }}, 1200);
     }})();
   </script>
 </body>
@@ -676,10 +757,14 @@ def authenticate_provider(
 
 
 @app.post("/api/providers/google/auth-url")
-def google_auth_url(request: Request) -> dict[str, object]:
+def google_auth_url(
+    request: Request,
+    mobile_callback: str | None = Query(default=None),
+) -> dict[str, object]:
     _cleanup_google_oauth_pending()
 
     redirect_uri = _build_google_redirect_uri(request)
+    mobile_callback_uri = _normalize_mobile_callback_uri(mobile_callback)
     client_id = _google_client_id()
     with _oauthlib_local_insecure_transport(redirect_uri):
         flow = Flow.from_client_config(
@@ -693,7 +778,11 @@ def google_auth_url(request: Request) -> dict[str, object]:
             include_granted_scopes="true",
             prompt="consent",
         )
-    GOOGLE_OAUTH_PENDING[state] = (redirect_uri, time.time())
+    GOOGLE_OAUTH_PENDING[state] = {
+        "redirect_uri": redirect_uri,
+        "created_at": time.time(),
+        "mobile_callback": mobile_callback_uri,
+    }
 
     return {
         "provider": "google",
@@ -728,7 +817,21 @@ def google_auth_callback(
             status_code=400,
         )
 
-    redirect_uri, _ = pending
+    redirect_uri = str((pending or {}).get("redirect_uri") or "").strip()
+    mobile_callback_uri_raw = (pending or {}).get("mobile_callback")
+    mobile_callback_uri = (
+        str(mobile_callback_uri_raw).strip()
+        if isinstance(mobile_callback_uri_raw, str)
+        else ""
+    )
+    if not redirect_uri:
+        return HTMLResponse(
+            content=_google_callback_html(
+                False,
+                "OAuth redirect URI를 찾을 수 없습니다. 다시 인증을 시도해주세요.",
+            ),
+            status_code=400,
+        )
 
     try:
         with (
@@ -752,11 +855,46 @@ def google_auth_callback(
         with open(token_path, "wb") as token_file:
             pickle.dump(flow.credentials, token_file)
     except Exception as error:
+        if mobile_callback_uri:
+            callback_url = _append_query_params(
+                mobile_callback_uri,
+                {
+                    "status": "error",
+                    "provider": "google",
+                    "message": f"Google 인증 토큰 저장 실패: {error}",
+                },
+            )
+            return HTMLResponse(
+                content=_google_callback_mobile_redirect_html(
+                    callback_url,
+                    False,
+                    f"Google 인증 토큰 저장 실패: {error}",
+                ),
+                status_code=400,
+            )
         return HTMLResponse(
             content=_google_callback_html(
                 False, f"Google 인증 토큰 저장 실패: {error}"
             ),
             status_code=400,
+        )
+
+    if mobile_callback_uri:
+        callback_url = _append_query_params(
+            mobile_callback_uri,
+            {
+                "status": "success",
+                "provider": "google",
+                "message": "Google 캘린더 인증이 완료되었습니다.",
+            },
+        )
+        return HTMLResponse(
+            content=_google_callback_mobile_redirect_html(
+                callback_url,
+                True,
+                "Google 캘린더 인증이 완료되었습니다.",
+            ),
+            status_code=200,
         )
 
     return HTMLResponse(
