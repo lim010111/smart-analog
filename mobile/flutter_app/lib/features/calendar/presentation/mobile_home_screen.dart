@@ -251,6 +251,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
         appleId: appleId,
         appPassword: appPassword,
       );
+      _appleIdController.text = appleId;
       _applePasswordController.clear();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -330,6 +331,15 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    final authResolved = _providerAuthenticated != null;
+    final authOk = _providerAuthenticated == true;
+    final authLabel = !authResolved
+        ? 'unknown'
+        : (authOk ? 'authenticated' : 'not authenticated');
+    final authColor = !authResolved
+        ? Colors.grey
+        : (authOk ? Colors.green : Colors.orange);
+
     return Scaffold(
       appBar: AppBar(title: const Text('Smart Analog Mobile')),
       body: FutureBuilder<WidgetSnapshot>(
@@ -379,8 +389,31 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
                   ),
                 ],
               ),
-              Text(
-                'Auth state: ${_providerAuthenticated == null ? 'unknown' : (_providerAuthenticated! ? 'authenticated' : 'not authenticated')}',
+              Card(
+                margin: const EdgeInsets.only(top: 8),
+                color: authColor.withValues(alpha: 0.10),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        authOk ? Icons.verified_user : Icons.warning_amber,
+                        color: authColor,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Auth state: $authLabel',
+                        style: TextStyle(
+                          color: authColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
               if (_selectedProvider == 'google' &&
                   _providerAuthenticated != true)
@@ -394,6 +427,15 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
                           ? 'Starting Google sign-in...'
                           : 'Start Google Sign-in',
                     ),
+                  ),
+                ),
+              if (_selectedProvider == 'google' &&
+                  _providerAuthenticated != true)
+                const Padding(
+                  padding: EdgeInsets.only(top: 6),
+                  child: Text(
+                    'Use external browser sign-in, then return to app. '
+                    'Auth status refreshes automatically on resume.',
                   ),
                 ),
               if (_selectedProvider == 'apple' &&
@@ -438,6 +480,10 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
                                 ? 'Saving Apple credentials...'
                                 : 'Save Apple credentials',
                           ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Use an Apple app-specific password (not your iCloud login password).',
                         ),
                       ],
                     ),
