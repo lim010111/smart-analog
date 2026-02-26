@@ -1,3 +1,5 @@
+import 'json_contract.dart';
+
 class WebEventDto {
   const WebEventDto({
     required this.id,
@@ -21,14 +23,14 @@ class WebEventDto {
 
   factory WebEventDto.fromJson(Map<String, dynamic> json) {
     return WebEventDto(
-      id: json['id'] as String? ?? '',
-      summary: json['summary'] as String? ?? '',
-      description: json['description'] as String? ?? '',
-      startTime: DateTime.parse(json['start_time'] as String),
-      endTime: DateTime.parse(json['end_time'] as String),
-      allDay: json['all_day'] as bool? ?? false,
-      colorHex: json['color_hex'] as String? ?? '#6C757D',
-      providerColorId: json['provider_color_id'] as String?,
+      id: requireNonEmptyString(json, 'id'),
+      summary: requireString(json, 'summary'),
+      description: requireString(json, 'description'),
+      startTime: requireIsoDateTime(json, 'start_time'),
+      endTime: requireIsoDateTime(json, 'end_time'),
+      allDay: requireBool(json, 'all_day'),
+      colorHex: requireNonEmptyString(json, 'color_hex'),
+      providerColorId: optionalString(json, 'provider_color_id'),
     );
   }
 }

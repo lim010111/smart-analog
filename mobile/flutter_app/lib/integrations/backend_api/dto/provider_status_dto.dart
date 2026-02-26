@@ -1,3 +1,5 @@
+import 'json_contract.dart';
+
 class ProviderStatusDto {
   const ProviderStatusDto({
     required this.provider,
@@ -9,8 +11,8 @@ class ProviderStatusDto {
 
   factory ProviderStatusDto.fromJson(Map<String, dynamic> json) {
     return ProviderStatusDto(
-      provider: json['provider'] as String? ?? 'unknown',
-      authenticated: json['authenticated'] as bool? ?? false,
+      provider: requireNonEmptyString(json, 'provider'),
+      authenticated: requireBool(json, 'authenticated'),
     );
   }
 }

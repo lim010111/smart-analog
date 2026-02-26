@@ -1,4 +1,5 @@
 import 'web_event_dto.dart';
+import 'json_contract.dart';
 
 class TodayEventsResponseDto {
   const TodayEventsResponseDto({
@@ -14,15 +15,12 @@ class TodayEventsResponseDto {
   final List<WebEventDto> events;
 
   factory TodayEventsResponseDto.fromJson(Map<String, dynamic> json) {
-    final eventsJson = json['events'] as List<dynamic>? ?? <dynamic>[];
+    final eventsJson = requireObjectList(json, 'events');
     return TodayEventsResponseDto(
-      provider: json['provider'] as String? ?? 'google',
-      date: json['date'] as String? ?? '',
-      count: json['count'] as int? ?? 0,
-      events: eventsJson
-          .whereType<Map<String, dynamic>>()
-          .map(WebEventDto.fromJson)
-          .toList(),
+      provider: requireNonEmptyString(json, 'provider'),
+      date: requireNonEmptyString(json, 'date'),
+      count: requireInt(json, 'count'),
+      events: eventsJson.map(WebEventDto.fromJson).toList(),
     );
   }
 }

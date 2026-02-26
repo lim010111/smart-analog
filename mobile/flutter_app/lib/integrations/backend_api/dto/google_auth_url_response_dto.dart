@@ -1,3 +1,5 @@
+import 'json_contract.dart';
+
 class GoogleAuthUrlResponseDto {
   const GoogleAuthUrlResponseDto({
     required this.provider,
@@ -15,11 +17,11 @@ class GoogleAuthUrlResponseDto {
 
   factory GoogleAuthUrlResponseDto.fromJson(Map<String, dynamic> json) {
     return GoogleAuthUrlResponseDto(
-      provider: json['provider'] as String? ?? 'google',
-      authUrl: json['auth_url'] as String? ?? '',
-      state: json['state'] as String? ?? '',
-      redirectUri: json['redirect_uri'] as String? ?? '',
-      clientId: json['client_id'] as String? ?? '',
+      provider: requireNonEmptyString(json, 'provider'),
+      authUrl: requireNonEmptyString(json, 'auth_url'),
+      state: requireNonEmptyString(json, 'state'),
+      redirectUri: requireNonEmptyString(json, 'redirect_uri'),
+      clientId: requireNonEmptyString(json, 'client_id'),
     );
   }
 }
