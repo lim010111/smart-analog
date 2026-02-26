@@ -22,6 +22,11 @@ from fastapi.responses import HTMLResponse, Response
 from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel, Field
 
+from .google_oauth_pending_store import (
+    GoogleOAuthPendingRecord,
+    GoogleOAuthPendingStore,
+)
+
 from src.services.ai.briefing import AITodayBriefingService
 from src.services.ai.color_schema import ColorRule
 from src.services.calendar import CalendarService
@@ -95,9 +100,34 @@ WEB_SETTINGS: dict[str, object] = {
     "widget_pinned": True,
 }
 
-GoogleOAuthPending = dict[str, str | float | None]
-GOOGLE_OAUTH_PENDING: dict[str, GoogleOAuthPending] = {}
-GOOGLE_OAUTH_TTL_SECONDS = 600
+
+def _google_oauth_pending_ttl_seconds() -> int:
+    raw = os.getenv("WEB_GOOGLE_OAUTH_PENDING_TTL_SECONDS", "600").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 600
+
+
+def _google_oauth_pending_db_path() -> Path:
+    explicit = os.getenv("WEB_GOOGLE_OAUTH_PENDING_DB_PATH", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+
+    persistent_data = Path("/data")
+    if persistent_data.is_dir():
+        return persistent_data / "clock_widget_google_oauth_pending.sqlite3"
+
+    fallback_dir = Path(tempfile.gettempdir()) / "clock_widget_web"
+    return fallback_dir / "google_oauth_pending.sqlite3"
+
+
+GOOGLE_OAUTH_TTL_SECONDS = _google_oauth_pending_ttl_seconds()
+GOOGLE_OAUTH_PENDING_STORE = GoogleOAuthPendingStore(
+    db_path=_google_oauth_pending_db_path(),
+    ttl_seconds=GOOGLE_OAUTH_TTL_SECONDS,
+)
+GOOGLE_OAUTH_PENDING_STORE.initialize()
 OAUTHLIB_TRANSPORT_LOCK = threading.RLock()
 
 ColorApplyValue = bool | int | float | str | None
@@ -270,14 +300,7 @@ def _allowed_origins() -> list[str]:
 
 
 def _cleanup_google_oauth_pending() -> None:
-    now = time.time()
-    expired = [
-        state
-        for state, pending in GOOGLE_OAUTH_PENDING.items()
-        if now - float(pending.get("created_at", 0.0) or 0.0) > GOOGLE_OAUTH_TTL_SECONDS
-    ]
-    for state in expired:
-        GOOGLE_OAUTH_PENDING.pop(state, None)
+    GOOGLE_OAUTH_PENDING_STORE.cleanup_expired()
 
 
 def _google_client_id() -> str:
@@ -778,11 +801,11 @@ def google_auth_url(
             include_granted_scopes="true",
             prompt="consent",
         )
-    GOOGLE_OAUTH_PENDING[state] = {
-        "redirect_uri": redirect_uri,
-        "created_at": time.time(),
-        "mobile_callback": mobile_callback_uri,
-    }
+    GOOGLE_OAUTH_PENDING_STORE.put(
+        state=state,
+        redirect_uri=redirect_uri,
+        mobile_callback=mobile_callback_uri,
+    )
 
     return {
         "provider": "google",
@@ -807,7 +830,9 @@ def google_auth_callback(
             status_code=400,
         )
 
-    pending = GOOGLE_OAUTH_PENDING.pop(received_state, None)
+    pending: GoogleOAuthPendingRecord | None = GOOGLE_OAUTH_PENDING_STORE.pop(
+        received_state
+    )
     if pending is None:
         return HTMLResponse(
             content=_google_callback_html(
@@ -817,8 +842,8 @@ def google_auth_callback(
             status_code=400,
         )
 
-    redirect_uri = str((pending or {}).get("redirect_uri") or "").strip()
-    mobile_callback_uri_raw = (pending or {}).get("mobile_callback")
+    redirect_uri = str(pending.get("redirect_uri") or "").strip()
+    mobile_callback_uri_raw = pending.get("mobile_callback")
     mobile_callback_uri = (
         str(mobile_callback_uri_raw).strip()
         if isinstance(mobile_callback_uri_raw, str)
