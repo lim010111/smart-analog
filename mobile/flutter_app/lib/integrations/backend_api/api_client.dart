@@ -59,11 +59,14 @@ class BackendApiClient {
     return ProviderStatusDto.fromJson(decoded);
   }
 
-  Future<GoogleAuthUrlResponseDto> fetchGoogleAuthUrl() async {
-    final uri = _buildUri(
-      '/api/providers/google/auth-url',
-      const <String, String>{},
-    );
+  Future<GoogleAuthUrlResponseDto> fetchGoogleAuthUrl({
+    String? mobileCallback,
+  }) async {
+    final query = <String, String>{};
+    if (mobileCallback != null && mobileCallback.trim().isNotEmpty) {
+      query['mobile_callback'] = mobileCallback.trim();
+    }
+    final uri = _buildUri('/api/providers/google/auth-url', query);
     final decoded = await _postJsonObject(uri);
     return GoogleAuthUrlResponseDto.fromJson(decoded);
   }

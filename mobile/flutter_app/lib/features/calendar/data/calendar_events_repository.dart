@@ -47,8 +47,10 @@ class CalendarEventsRepository {
     return _apiClient.fetchProviderStatus(provider: provider);
   }
 
-  Future<GoogleAuthUrlResponseDto> fetchGoogleAuthUrl() {
-    return _apiClient.fetchGoogleAuthUrl();
+  Future<GoogleAuthUrlResponseDto> fetchGoogleAuthUrl({
+    String? mobileCallback,
+  }) {
+    return _apiClient.fetchGoogleAuthUrl(mobileCallback: mobileCallback);
   }
 
   Future<AppleCredentialsResponseDto> setAppleCredentials({

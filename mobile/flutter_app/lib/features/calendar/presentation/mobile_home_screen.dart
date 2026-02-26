@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -32,6 +33,9 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   String? _googleRedirectUri;
   Timer? _authStatusPollTimer;
   int _authStatusPollAttempts = 0;
+  final AppLinks _appLinks = AppLinks();
+  StreamSubscription<Uri>? _deepLinkSubscription;
+  String? _lastHandledDeepLink;
   final TextEditingController _appleIdController = TextEditingController();
   final TextEditingController _applePasswordController =
       TextEditingController();
@@ -45,16 +49,75 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     final apiClient = BackendApiClient(baseUrl: BackendConfig.resolveBaseUrl());
     _eventsRepository = CalendarEventsRepository(apiClient: apiClient);
     _snapshotFuture = _bootstrapLoad();
+    _initDeepLinkHandling();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _authStatusPollTimer?.cancel();
+    _deepLinkSubscription?.cancel();
     _appleIdController.dispose();
     _applePasswordController.dispose();
     _eventsRepository.dispose();
     super.dispose();
+  }
+
+  Future<void> _initDeepLinkHandling() async {
+    try {
+      final initial = await _appLinks.getInitialLink();
+      if (initial != null) {
+        await _handleIncomingDeepLink(initial);
+      }
+    } catch (_) {
+      // Ignore deep-link bootstrap failures and keep app usable.
+    }
+
+    _deepLinkSubscription = _appLinks.uriLinkStream.listen((uri) {
+      _handleIncomingDeepLink(uri);
+    });
+  }
+
+  Future<void> _handleIncomingDeepLink(Uri uri) async {
+    if (!mounted) {
+      return;
+    }
+
+    if (uri.scheme != 'smartanalog') {
+      return;
+    }
+    if (uri.host != 'auth') {
+      return;
+    }
+
+    final path = uri.path.toLowerCase();
+    if (path != '/google' && path != 'google') {
+      return;
+    }
+
+    final signature = uri.toString();
+    if (_lastHandledDeepLink == signature) {
+      return;
+    }
+    _lastHandledDeepLink = signature;
+
+    final status = (uri.queryParameters['status'] ?? '').toLowerCase();
+    final message = uri.queryParameters['message'] ?? '';
+    if (mounted && status.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            message.isNotEmpty
+                ? message
+                : (status == 'success'
+                      ? 'Google authentication completed.'
+                      : 'Google authentication failed.'),
+          ),
+        ),
+      );
+    }
+
+    await _refreshAuthStatusAndMaybeReload();
   }
 
   @override
@@ -183,7 +246,9 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     });
 
     try {
-      final payload = await _eventsRepository.fetchGoogleAuthUrl();
+      final payload = await _eventsRepository.fetchGoogleAuthUrl(
+        mobileCallback: BackendConfig.googleMobileCallbackUri,
+      );
       _googleRedirectUri = payload.redirectUri;
 
       final uri = Uri.tryParse(payload.authUrl);
