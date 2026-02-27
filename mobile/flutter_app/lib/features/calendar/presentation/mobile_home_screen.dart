@@ -12,6 +12,12 @@ import '../application/widget_snapshot_builder.dart';
 import '../data/calendar_events_repository.dart';
 import '../domain/models/calendar_event.dart';
 import '../domain/models/widget_snapshot.dart';
+import '../../briefing/presentation/briefing_panel.dart';
+import 'provider_controls.dart';
+import 'event_create_form.dart';
+import 'natural_input_form.dart';
+import '../../settings/presentation/settings_panel.dart';
+import '../../settings/presentation/color_schema_editor.dart';
 
 class MobileHomeScreen extends StatefulWidget {
   const MobileHomeScreen({super.key});
@@ -465,15 +471,6 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
   @override
   Widget build(BuildContext context) {
-    final authResolved = _providerAuthenticated != null;
-    final authOk = _providerAuthenticated == true;
-    final authLabel = !authResolved
-        ? 'unknown'
-        : (authOk ? 'authenticated' : 'not authenticated');
-    final authColor = !authResolved
-        ? Colors.grey
-        : (authOk ? Colors.green : Colors.orange);
-
     return Scaffold(
       appBar: AppBar(title: const Text('Smart Analog Mobile')),
       body: FutureBuilder<WidgetSnapshot>(
@@ -505,136 +502,40 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               Text('Timezone: ${snapshot.timezone}'),
               Text('Loaded from: $_loadSource'),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  const Text('Provider: '),
-                  const SizedBox(width: 8),
-                  DropdownButton<String>(
-                    value: _selectedProvider,
-                    items: _providers
-                        .map(
-                          (provider) => DropdownMenuItem<String>(
-                            value: provider,
-                            child: Text(provider),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: _onProviderChanged,
-                  ),
-                ],
+              ProviderControlsWidget(
+                activeProvider: _activeProvider,
+                selectedProvider: _selectedProvider,
+                providers: _providers,
+                providerAuthenticated: _providerAuthenticated,
+                authFlowBusy: _authFlowBusy,
+                googleRedirectUri: _googleRedirectUri,
+                appleCredentialBusy: _appleCredentialBusy,
+                appleIdController: _appleIdController,
+                applePasswordController: _applePasswordController,
+                onProviderChanged: _onProviderChanged,
+                onStartGoogleAuth: _startGoogleAuthFlow,
+                onSubmitAppleCredentials: _submitAppleCredentials,
+                onRefreshAuthOnly: _refreshAuthOnly,
               ),
-              Card(
-                margin: const EdgeInsets.only(top: 8),
-                color: authColor.withValues(alpha: 0.10),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        authOk ? Icons.verified_user : Icons.warning_amber,
-                        color: authColor,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Auth state: $authLabel',
-                        style: TextStyle(
-                          color: authColor,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+              SettingsPanel(repository: _eventsRepository),
+              EventCreateForm(
+                repository: _eventsRepository,
+                provider: _selectedProvider,
+                onCreated: _regenerateSnapshot,
               ),
-              if (_selectedProvider == 'google' &&
-                  _providerAuthenticated != true)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: FilledButton.icon(
-                    onPressed: _authFlowBusy ? null : _startGoogleAuthFlow,
-                    icon: const Icon(Icons.login),
-                    label: Text(
-                      _authFlowBusy
-                          ? 'Starting Google sign-in...'
-                          : 'Start Google Sign-in',
-                    ),
-                  ),
-                ),
-              if (_selectedProvider == 'google' &&
-                  _providerAuthenticated != true)
-                const Padding(
-                  padding: EdgeInsets.only(top: 6),
-                  child: Text(
-                    'Use external browser sign-in, then return to app. '
-                    'Auth status refreshes automatically on resume.',
-                  ),
-                ),
-              if (_selectedProvider == 'apple' &&
-                  _providerAuthenticated != true)
-                Card(
-                  margin: const EdgeInsets.only(top: 8),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Apple credentials (app-specific password)'),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _appleIdController,
-                          keyboardType: TextInputType.emailAddress,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          decoration: const InputDecoration(
-                            labelText: 'Apple ID',
-                            hintText: 'name@example.com',
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _applePasswordController,
-                          obscureText: true,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          decoration: const InputDecoration(
-                            labelText: 'App-specific password',
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        FilledButton.icon(
-                          onPressed: _appleCredentialBusy
-                              ? null
-                              : _submitAppleCredentials,
-                          icon: const Icon(Icons.lock_open),
-                          label: Text(
-                            _appleCredentialBusy
-                                ? 'Saving Apple credentials...'
-                                : 'Save Apple credentials',
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'Use an Apple app-specific password (not your iCloud login password).',
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              if (_googleRedirectUri != null && _googleRedirectUri!.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text('Redirect URI: $_googleRedirectUri'),
-                ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _refreshAuthOnly,
-                icon: const Icon(Icons.verified_user),
-                label: const Text('Refresh auth status'),
+              NaturalInputForm(
+                repository: _eventsRepository,
+                provider: _selectedProvider,
+                onCreated: _regenerateSnapshot,
               ),
-              Text('Provider: $_activeProvider'),
+              BriefingPanel(
+                repository: _eventsRepository,
+                provider: _selectedProvider,
+              ),
+              ColorSchemaEditor(
+                repository: _eventsRepository,
+                provider: _selectedProvider,
+              ),
               Text('Events loaded: ${snapshot.events.length}'),
               Text('Clock segments: ${snapshot.segments.length}'),
               const SizedBox(height: 12),
