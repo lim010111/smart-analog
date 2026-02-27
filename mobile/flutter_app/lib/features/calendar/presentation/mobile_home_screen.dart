@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/config/backend_config.dart';
 import '../../../core/storage/widget_snapshot_store.dart';
 import '../../../integrations/backend_api/api_client.dart';
+import '../../../integrations/widget_host/widget_host_bridge.dart';
 import '../application/widget_snapshot_builder.dart';
 import '../data/calendar_events_repository.dart';
 import '../domain/models/calendar_event.dart';
@@ -32,6 +33,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   static const Duration _resumeRefreshDebounce = Duration(seconds: 2);
 
   late final WidgetSnapshotStore _snapshotStore;
+  late final WidgetHostBridge _widgetHostBridge;
   late final CalendarEventsRepository _eventsRepository;
   late final String _backendBaseUrl;
   late Future<WidgetSnapshot> _snapshotFuture;
@@ -60,6 +62,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _snapshotStore = FileWidgetSnapshotStore();
+    _widgetHostBridge = WidgetHostBridge();
     _backendBaseUrl = BackendConfig.resolveBaseUrl();
     final apiClient = BackendApiClient(baseUrl: _backendBaseUrl);
     _eventsRepository = CalendarEventsRepository(apiClient: apiClient);
@@ -211,7 +214,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
         timezone: now.timeZoneName.isEmpty ? 'UTC' : now.timeZoneName,
         events: backendEvents,
       );
-      await _snapshotStore.save(freshSnapshot);
+      await _saveAndRefreshWidgets(freshSnapshot);
       _loadSource = 'backend';
       _activeProvider = backendEvents.isEmpty
           ? provider
@@ -236,7 +239,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
       timezone: now.timeZoneName.isEmpty ? 'UTC' : now.timeZoneName,
       events: _sampleEvents(now),
     );
-    await _snapshotStore.save(snapshot);
+    await _saveAndRefreshWidgets(snapshot);
     _loadSource = 'sample';
     _activeProvider = 'local';
     return snapshot;
@@ -248,6 +251,14 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
         _snapshotFuture = _reloadForProvider(_selectedProvider);
       });
     }
+  }
+
+  Future<void> _saveAndRefreshWidgets(WidgetSnapshot snapshot) async {
+    await _snapshotStore.save(snapshot);
+    await _widgetHostBridge.syncWidgetReadPayload(
+      buildWidgetReadPayload(snapshot),
+    );
+    await _widgetHostBridge.refreshHomeWidgets();
   }
 
   Future<void> _onProviderChanged(String? value) async {
