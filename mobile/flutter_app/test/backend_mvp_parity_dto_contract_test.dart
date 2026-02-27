@@ -121,6 +121,23 @@ void main() {
       expect(apply.updated, 4);
     });
 
+    test('parses apply-status timestamps from numeric payload', () {
+      final status = ApplyColorsStatusResponseDto.fromJson(<String, dynamic>{
+        'provider': 'google',
+        'running': true,
+        'queued': false,
+        'last_started_at': 1731570000.5,
+        'last_finished_at': 1731570100,
+        'last_processed': 22,
+        'last_updated': 11,
+        'last_error': '',
+      });
+
+      expect(status.lastStartedAt, '1731570000.5');
+      expect(status.lastFinishedAt, '1731570100');
+      expect(status.running, isTrue);
+    });
+
     test('throws on malformed settings payload', () {
       expect(
         () => SettingsResponseDto.fromJson(<String, dynamic>{'theme': 'dark'}),

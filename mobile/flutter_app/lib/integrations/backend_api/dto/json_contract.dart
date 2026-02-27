@@ -38,6 +38,20 @@ String? optionalString(Map<String, dynamic> json, String key) {
   return value;
 }
 
+String? optionalStringOrNumberAsString(Map<String, dynamic> json, String key) {
+  if (!json.containsKey(key) || json[key] == null) {
+    return null;
+  }
+  final value = json[key];
+  if (value is String) {
+    return value;
+  }
+  if (value is num) {
+    return value.toString();
+  }
+  throw FormatException('Invalid "$key" in response payload.');
+}
+
 bool requireBool(Map<String, dynamic> json, String key) {
   final value = json[key];
   if (value is! bool) {

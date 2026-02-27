@@ -16,6 +16,18 @@ void main() {
       expect(value, isNull);
     });
 
+    test('optionalStringOrNumberAsString accepts numbers and strings', () {
+      final fromNum = optionalStringOrNumberAsString(<String, dynamic>{
+        'ts': 1731570000.25,
+      }, 'ts');
+      final fromString = optionalStringOrNumberAsString(<String, dynamic>{
+        'ts': '2026-02-27T10:00:00+09:00',
+      }, 'ts');
+
+      expect(fromNum, '1731570000.25');
+      expect(fromString, '2026-02-27T10:00:00+09:00');
+    });
+
     test('requireObjectList rejects non-object members', () {
       expect(
         () => requireObjectList(<String, dynamic>{
