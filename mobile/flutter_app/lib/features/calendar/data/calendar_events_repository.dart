@@ -1,8 +1,15 @@
 import '../../../integrations/backend_api/api_client.dart';
 import '../../../integrations/backend_api/dto/apple_credentials_response_dto.dart';
+import '../../../integrations/backend_api/dto/briefing_response_dto.dart';
+import '../../../integrations/backend_api/dto/color_rule_dto.dart';
+import '../../../integrations/backend_api/dto/colors_response_dto.dart';
+import '../../../integrations/backend_api/dto/create_event_response_dto.dart';
 import '../../../integrations/backend_api/dto/google_auth_url_response_dto.dart';
+import '../../../integrations/backend_api/dto/natural_input_response_dto.dart';
+import '../../../integrations/backend_api/dto/provider_auth_response_dto.dart';
 import '../../../integrations/backend_api/dto/provider_status_dto.dart';
 import '../../../integrations/backend_api/dto/providers_response_dto.dart';
+import '../../../integrations/backend_api/dto/settings_response_dto.dart';
 import '../domain/models/calendar_event.dart';
 
 class CalendarEventsRepository {
@@ -61,6 +68,150 @@ class CalendarEventsRepository {
       appleId: appleId,
       appPassword: appPassword,
     );
+  }
+
+  Future<ProviderAuthResponseDto> authenticateProvider({
+    required String provider,
+  }) {
+    return _apiClient.authenticateProvider(provider: provider);
+  }
+
+  Future<ProviderLogoutResponseDto> logoutProvider({required String provider}) {
+    return _apiClient.logoutProvider(provider: provider);
+  }
+
+  Future<SettingsResponseDto> fetchSettings() {
+    return _apiClient.fetchSettings();
+  }
+
+  Future<SettingsResponseDto> updateSettings({
+    required String theme,
+    required int eventOpacity,
+    required int clockOpacity,
+    required bool briefingEnabled,
+    required bool briefingTtsEnabled,
+    required bool widgetPinned,
+  }) {
+    return _apiClient.updateSettings(
+      theme: theme,
+      eventOpacity: eventOpacity,
+      clockOpacity: clockOpacity,
+      briefingEnabled: briefingEnabled,
+      briefingTtsEnabled: briefingTtsEnabled,
+      widgetPinned: widgetPinned,
+    );
+  }
+
+  Future<CreateEventResponseDto> createEvent({
+    required String provider,
+    required String summary,
+    required String startTime,
+    required String endTime,
+    required bool allDay,
+  }) {
+    return _apiClient.createEvent(
+      provider: provider,
+      summary: summary,
+      startTime: startTime,
+      endTime: endTime,
+      allDay: allDay,
+    );
+  }
+
+  Future<NaturalParseResponseDto> parseNaturalInput({
+    required String provider,
+    required String text,
+  }) {
+    return _apiClient.parseNaturalInput(provider: provider, text: text);
+  }
+
+  Future<NaturalCreateResponseDto> createEventFromNaturalInput({
+    required String provider,
+    required String text,
+  }) {
+    return _apiClient.createEventFromNaturalInput(
+      provider: provider,
+      text: text,
+    );
+  }
+
+  Future<BriefingResponseDto> fetchTodayBriefing({
+    required String provider,
+    int maxResults = 20,
+    bool force = true,
+  }) {
+    return _apiClient.fetchTodayBriefing(
+      provider: provider,
+      maxResults: maxResults,
+      force: force,
+    );
+  }
+
+  Future<BriefingTtsBase64ResponseDto> generateBriefingTtsBase64({
+    required String text,
+    String responseFormat = 'wav',
+    String? voice,
+    String? model,
+    String? instructions,
+  }) {
+    return _apiClient.generateBriefingTtsBase64(
+      text: text,
+      responseFormat: responseFormat,
+      voice: voice,
+      model: model,
+      instructions: instructions,
+    );
+  }
+
+  Future<BriefingTtsBinaryResponse> generateBriefingTtsBinary({
+    required String text,
+    String responseFormat = 'wav',
+    String? voice,
+    String? model,
+    String? instructions,
+  }) {
+    return _apiClient.generateBriefingTtsBinary(
+      text: text,
+      responseFormat: responseFormat,
+      voice: voice,
+      model: model,
+      instructions: instructions,
+    );
+  }
+
+  Future<ColorPaletteResponseDto> fetchColorPalette({
+    required String provider,
+  }) {
+    return _apiClient.fetchColorPalette(provider: provider);
+  }
+
+  Future<ColorSchemaResponseDto> fetchColorSchema({required String provider}) {
+    return _apiClient.fetchColorSchema(provider: provider);
+  }
+
+  Future<UpdateColorSchemaResponseDto> updateColorSchema({
+    required String provider,
+    required List<ColorRuleDto> rules,
+  }) {
+    return _apiClient.updateColorSchema(provider: provider, rules: rules);
+  }
+
+  Future<ApplyColorsResponseDto> applyColorsToAll({
+    required String provider,
+    int? maxResults,
+    int pageSize = 250,
+  }) {
+    return _apiClient.applyColorsToAll(
+      provider: provider,
+      maxResults: maxResults,
+      pageSize: pageSize,
+    );
+  }
+
+  Future<ApplyColorsStatusResponseDto> fetchApplyColorsStatus({
+    required String provider,
+  }) {
+    return _apiClient.fetchApplyColorsStatus(provider: provider);
   }
 
   void dispose() {

@@ -1,11 +1,21 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
 import 'dto/apple_credentials_response_dto.dart';
+import 'dto/briefing_response_dto.dart';
+import 'dto/color_rule_dto.dart';
+import 'dto/colors_response_dto.dart';
+import 'dto/create_event_response_dto.dart';
 import 'dto/google_auth_url_response_dto.dart';
+import 'dto/natural_input_response_dto.dart';
+import 'dto/provider_auth_response_dto.dart';
 import 'dto/provider_status_dto.dart';
 import 'dto/providers_response_dto.dart';
+import 'dto/settings_response_dto.dart';
 import 'dto/today_events_response_dto.dart';
 
 class BackendApiClient {
@@ -20,6 +30,33 @@ class BackendApiClient {
         ? baseUrl.substring(0, baseUrl.length - 1)
         : baseUrl;
     return Uri.parse('$normalized$path').replace(queryParameters: query);
+  }
+
+  List<Uri> _androidCandidateUris(Uri primary) {
+    if (!Platform.isAndroid) {
+      return <Uri>[primary];
+    }
+
+    final host = primary.host;
+    String? alternateHost;
+    if (host == '10.0.2.2') {
+      alternateHost = '127.0.0.1';
+    } else if (host == '127.0.0.1') {
+      alternateHost = '10.0.2.2';
+    }
+
+    if (alternateHost == null) {
+      return <Uri>[primary];
+    }
+
+    return <Uri>[primary, primary.replace(host: alternateHost)];
+  }
+
+  bool _isNetworkException(Object error) {
+    return error is SocketException ||
+        error is HttpException ||
+        error is TimeoutException ||
+        error is http.ClientException;
   }
 
   Future<TodayEventsResponseDto> fetchTodayEvents({
@@ -89,25 +126,265 @@ class BackendApiClient {
     return AppleCredentialsResponseDto.fromJson(decoded);
   }
 
+  Future<ProviderAuthResponseDto> authenticateProvider({
+    required String provider,
+  }) async {
+    final uri = _buildUri('/api/providers/authenticate', <String, String>{
+      'provider': provider,
+    });
+    final decoded = await _postJsonObject(uri);
+    return ProviderAuthResponseDto.fromJson(decoded);
+  }
+
+  Future<ProviderLogoutResponseDto> logoutProvider({
+    required String provider,
+  }) async {
+    final uri = _buildUri('/api/providers/logout', <String, String>{
+      'provider': provider,
+    });
+    final decoded = await _postJsonObject(uri);
+    return ProviderLogoutResponseDto.fromJson(decoded);
+  }
+
+  Future<SettingsResponseDto> fetchSettings() async {
+    final uri = _buildUri('/api/settings', const <String, String>{});
+    final decoded = await _getJsonObject(uri);
+    return SettingsResponseDto.fromJson(decoded);
+  }
+
+  Future<SettingsResponseDto> updateSettings({
+    required String theme,
+    required int eventOpacity,
+    required int clockOpacity,
+    required bool briefingEnabled,
+    required bool briefingTtsEnabled,
+    required bool widgetPinned,
+  }) async {
+    final uri = _buildUri('/api/settings', const <String, String>{});
+    final decoded = await _putJsonObject(
+      uri,
+      jsonBody: <String, dynamic>{
+        'theme': theme,
+        'event_opacity': eventOpacity,
+        'clock_opacity': clockOpacity,
+        'briefing_enabled': briefingEnabled,
+        'briefing_tts_enabled': briefingTtsEnabled,
+        'widget_pinned': widgetPinned,
+      },
+    );
+    return SettingsResponseDto.fromJson(decoded);
+  }
+
+  Future<CreateEventResponseDto> createEvent({
+    required String provider,
+    required String summary,
+    required String startTime,
+    required String endTime,
+    required bool allDay,
+  }) async {
+    final uri = _buildUri('/api/events/create', <String, String>{
+      'provider': provider,
+    });
+    final decoded = await _postJsonObject(
+      uri,
+      jsonBody: <String, dynamic>{
+        'summary': summary,
+        'start_time': startTime,
+        'end_time': endTime,
+        'all_day': allDay,
+      },
+    );
+    return CreateEventResponseDto.fromJson(decoded);
+  }
+
+  Future<NaturalParseResponseDto> parseNaturalInput({
+    required String provider,
+    required String text,
+  }) async {
+    final uri = _buildUri('/api/events/natural-input/parse', <String, String>{
+      'provider': provider,
+    });
+    final decoded = await _postJsonObject(
+      uri,
+      jsonBody: <String, dynamic>{'text': text},
+    );
+    return NaturalParseResponseDto.fromJson(decoded);
+  }
+
+  Future<NaturalCreateResponseDto> createEventFromNaturalInput({
+    required String provider,
+    required String text,
+  }) async {
+    final uri = _buildUri('/api/events/natural-input/create', <String, String>{
+      'provider': provider,
+    });
+    final decoded = await _postJsonObject(
+      uri,
+      jsonBody: <String, dynamic>{'text': text},
+    );
+    return NaturalCreateResponseDto.fromJson(decoded);
+  }
+
+  Future<BriefingResponseDto> fetchTodayBriefing({
+    required String provider,
+    int maxResults = 20,
+    bool force = true,
+  }) async {
+    final uri = _buildUri('/api/briefing/today', <String, String>{
+      'provider': provider,
+      'max_results': '$maxResults',
+      'force': force ? 'true' : 'false',
+    });
+    final decoded = await _getJsonObject(uri);
+    return BriefingResponseDto.fromJson(decoded);
+  }
+
+  Future<BriefingTtsBase64ResponseDto> generateBriefingTtsBase64({
+    required String text,
+    String responseFormat = 'wav',
+    String? voice,
+    String? model,
+    String? instructions,
+  }) async {
+    final uri = _buildUri('/api/briefing/tts/base64', const <String, String>{});
+    final decoded = await _postJsonObject(
+      uri,
+      jsonBody: <String, dynamic>{
+        'text': text,
+        'response_format': responseFormat,
+        if (voice != null && voice.trim().isNotEmpty) 'voice': voice,
+        if (model != null && model.trim().isNotEmpty) 'model': model,
+        if (instructions != null && instructions.trim().isNotEmpty)
+          'instructions': instructions,
+      },
+    );
+    return BriefingTtsBase64ResponseDto.fromJson(decoded);
+  }
+
+  Future<BriefingTtsBinaryResponse> generateBriefingTtsBinary({
+    required String text,
+    String responseFormat = 'wav',
+    String? voice,
+    String? model,
+    String? instructions,
+  }) async {
+    final uri = _buildUri('/api/briefing/tts', const <String, String>{});
+    final response = await _postRaw(
+      uri,
+      jsonBody: <String, dynamic>{
+        'text': text,
+        'response_format': responseFormat,
+        if (voice != null && voice.trim().isNotEmpty) 'voice': voice,
+        if (model != null && model.trim().isNotEmpty) 'model': model,
+        if (instructions != null && instructions.trim().isNotEmpty)
+          'instructions': instructions,
+      },
+    );
+    return BriefingTtsBinaryResponse(
+      bytes: response.bodyBytes,
+      mimeType: response.headers['content-type'] ?? 'application/octet-stream',
+    );
+  }
+
+  Future<ColorPaletteResponseDto> fetchColorPalette({
+    required String provider,
+  }) async {
+    final uri = _buildUri('/api/colors/palette', <String, String>{
+      'provider': provider,
+    });
+    final decoded = await _getJsonObject(uri);
+    return ColorPaletteResponseDto.fromJson(decoded);
+  }
+
+  Future<ColorSchemaResponseDto> fetchColorSchema({
+    required String provider,
+  }) async {
+    final uri = _buildUri('/api/colors/schema', <String, String>{
+      'provider': provider,
+    });
+    final decoded = await _getJsonObject(uri);
+    return ColorSchemaResponseDto.fromJson(decoded);
+  }
+
+  Future<UpdateColorSchemaResponseDto> updateColorSchema({
+    required String provider,
+    required List<ColorRuleDto> rules,
+  }) async {
+    final uri = _buildUri('/api/colors/schema', <String, String>{
+      'provider': provider,
+    });
+    final decoded = await _putJsonObject(
+      uri,
+      jsonBody: <String, dynamic>{
+        'rules': rules.map((rule) => rule.toJson()).toList(),
+      },
+    );
+    return UpdateColorSchemaResponseDto.fromJson(decoded);
+  }
+
+  Future<ApplyColorsResponseDto> applyColorsToAll({
+    required String provider,
+    int? maxResults,
+    int pageSize = 250,
+  }) async {
+    final query = <String, String>{
+      'provider': provider,
+      'page_size': '$pageSize',
+    };
+    if (maxResults != null) {
+      query['max_results'] = '$maxResults';
+    }
+
+    final uri = _buildUri('/api/colors/apply-all', query);
+    final decoded = await _postJsonObject(uri);
+    return ApplyColorsResponseDto.fromJson(decoded);
+  }
+
+  Future<ApplyColorsStatusResponseDto> fetchApplyColorsStatus({
+    required String provider,
+  }) async {
+    final uri = _buildUri('/api/colors/apply-status', <String, String>{
+      'provider': provider,
+    });
+    final decoded = await _getJsonObject(uri);
+    return ApplyColorsStatusResponseDto.fromJson(decoded);
+  }
+
   Future<Map<String, dynamic>> _getJsonObject(Uri uri) async {
-    final response = await _httpClient
-        .get(uri)
-        .timeout(const Duration(seconds: 8));
+    Object? lastNetworkError;
+    for (final candidate in _androidCandidateUris(uri)) {
+      try {
+        final response = await _httpClient
+            .get(candidate)
+            .timeout(const Duration(seconds: 8));
 
-    final status = response.statusCode;
-    final body = response.body;
-    if (status < 200 || status >= 300) {
-      throw BackendApiException(
-        statusCode: status,
-        message: _extractErrorMessage(body),
-      );
+        final status = response.statusCode;
+        final body = response.body;
+        if (status < 200 || status >= 300) {
+          throw BackendApiException(
+            statusCode: status,
+            message: _extractErrorMessage(body),
+          );
+        }
+
+        final decoded = jsonDecode(body);
+        if (decoded is! Map<String, dynamic>) {
+          throw FormatException('Unexpected response format from $candidate');
+        }
+        return decoded;
+      } on Exception catch (error) {
+        if (_isNetworkException(error)) {
+          lastNetworkError = error;
+          continue;
+        }
+        rethrow;
+      }
     }
 
-    final decoded = jsonDecode(body);
-    if (decoded is! Map<String, dynamic>) {
-      throw FormatException('Unexpected response format from $uri');
+    if (lastNetworkError != null) {
+      throw lastNetworkError;
     }
-    return decoded;
+    throw const HttpException('Backend request failed.');
   }
 
   Future<Map<String, dynamic>> _postJsonObject(
@@ -115,30 +392,133 @@ class BackendApiClient {
     Map<String, dynamic>? jsonBody,
   }) async {
     final payload = jsonBody == null ? null : jsonEncode(jsonBody);
-    final response = await _httpClient
-        .post(
-          uri,
-          headers: payload == null
-              ? const <String, String>{}
-              : const <String, String>{'Content-Type': 'application/json'},
-          body: payload,
-        )
-        .timeout(const Duration(seconds: 8));
+    Object? lastNetworkError;
+    for (final candidate in _androidCandidateUris(uri)) {
+      try {
+        final response = await _httpClient
+            .post(
+              candidate,
+              headers: payload == null
+                  ? const <String, String>{}
+                  : const <String, String>{'Content-Type': 'application/json'},
+              body: payload,
+            )
+            .timeout(const Duration(seconds: 8));
 
-    final status = response.statusCode;
-    final body = response.body;
-    if (status < 200 || status >= 300) {
-      throw BackendApiException(
-        statusCode: status,
-        message: _extractErrorMessage(body),
-      );
+        final status = response.statusCode;
+        final body = response.body;
+        if (status < 200 || status >= 300) {
+          throw BackendApiException(
+            statusCode: status,
+            message: _extractErrorMessage(body),
+          );
+        }
+
+        final decoded = jsonDecode(body);
+        if (decoded is! Map<String, dynamic>) {
+          throw FormatException('Unexpected response format from $candidate');
+        }
+        return decoded;
+      } on Exception catch (error) {
+        if (_isNetworkException(error)) {
+          lastNetworkError = error;
+          continue;
+        }
+        rethrow;
+      }
     }
 
-    final decoded = jsonDecode(body);
-    if (decoded is! Map<String, dynamic>) {
-      throw FormatException('Unexpected response format from $uri');
+    if (lastNetworkError != null) {
+      throw lastNetworkError;
     }
-    return decoded;
+    throw const HttpException('Backend request failed.');
+  }
+
+  Future<Map<String, dynamic>> _putJsonObject(
+    Uri uri, {
+    required Map<String, dynamic> jsonBody,
+  }) async {
+    final payload = jsonEncode(jsonBody);
+    Object? lastNetworkError;
+    for (final candidate in _androidCandidateUris(uri)) {
+      try {
+        final response = await _httpClient
+            .put(
+              candidate,
+              headers: const <String, String>{
+                'Content-Type': 'application/json',
+              },
+              body: payload,
+            )
+            .timeout(const Duration(seconds: 8));
+
+        final status = response.statusCode;
+        final body = response.body;
+        if (status < 200 || status >= 300) {
+          throw BackendApiException(
+            statusCode: status,
+            message: _extractErrorMessage(body),
+          );
+        }
+
+        final decoded = jsonDecode(body);
+        if (decoded is! Map<String, dynamic>) {
+          throw FormatException('Unexpected response format from $candidate');
+        }
+        return decoded;
+      } on Exception catch (error) {
+        if (_isNetworkException(error)) {
+          lastNetworkError = error;
+          continue;
+        }
+        rethrow;
+      }
+    }
+
+    if (lastNetworkError != null) {
+      throw lastNetworkError;
+    }
+    throw const HttpException('Backend request failed.');
+  }
+
+  Future<http.Response> _postRaw(
+    Uri uri, {
+    required Map<String, dynamic> jsonBody,
+  }) async {
+    final payload = jsonEncode(jsonBody);
+    Object? lastNetworkError;
+    for (final candidate in _androidCandidateUris(uri)) {
+      try {
+        final response = await _httpClient
+            .post(
+              candidate,
+              headers: const <String, String>{
+                'Content-Type': 'application/json',
+              },
+              body: payload,
+            )
+            .timeout(const Duration(seconds: 8));
+
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw BackendApiException(
+            statusCode: response.statusCode,
+            message: _extractErrorMessage(response.body),
+          );
+        }
+        return response;
+      } on Exception catch (error) {
+        if (_isNetworkException(error)) {
+          lastNetworkError = error;
+          continue;
+        }
+        rethrow;
+      }
+    }
+
+    if (lastNetworkError != null) {
+      throw lastNetworkError;
+    }
+    throw const HttpException('Backend request failed.');
   }
 
   String _extractErrorMessage(String body) {
@@ -168,4 +548,14 @@ class BackendApiException implements Exception {
   String toString() {
     return 'BackendApiException($statusCode): $message';
   }
+}
+
+class BriefingTtsBinaryResponse {
+  const BriefingTtsBinaryResponse({
+    required this.bytes,
+    required this.mimeType,
+  });
+
+  final Uint8List bytes;
+  final String mimeType;
 }
