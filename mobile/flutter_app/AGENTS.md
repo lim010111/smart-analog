@@ -33,6 +33,22 @@ Scope: Flutter app architecture, data contracts, and native-widget integration b
   - Android host: `android/app/*`
 - If WidgetKit/AppWidget targets are added, document their target dirs and snapshot bridge keys here.
 
+### Native Widget Targets (current scaffold)
+
+- Android AppWidget target path: `android/app/src/main/kotlin/com/smartanalog/flutter_app/SmartAnalogAppWidgetProvider.kt`
+- Android AppWidget resources:
+  - `android/app/src/main/res/layout/smart_analog_appwidget.xml`
+  - `android/app/src/main/res/xml/smart_analog_appwidget_info.xml`
+- iOS WidgetKit scaffold path: `ios/WidgetExtension/`
+
+### Snapshot bridge keys/channels
+
+- File contract name (read payload): `widget_snapshot_read_v1.json`
+- Method channel name: `com.smartanalog.flutter_app/widget_host`
+- Channel methods:
+  - `syncWidgetReadPayload`
+  - `refreshHomeWidgets`
+
 ## Commands
 
 - `flutter pub get`
