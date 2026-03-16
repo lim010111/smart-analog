@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/localization/app_i18n.dart';
 import '../../calendar/data/calendar_events_repository.dart';
 
 class BriefingPanel extends StatefulWidget {
@@ -28,6 +29,7 @@ class _BriefingPanelState extends State<BriefingPanel> {
   String _savedAudioPath = '';
 
   Future<void> _loadBriefing() async {
+    final i18n = context.i18n;
     setState(() => _loading = true);
     try {
       final response = await widget.repository.fetchTodayBriefing(
@@ -47,7 +49,7 @@ class _BriefingPanelState extends State<BriefingPanel> {
       }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Briefing load failed: $error')));
+      ).showSnackBar(SnackBar(content: Text(i18n.briefingLoadFailed(error))));
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -56,10 +58,11 @@ class _BriefingPanelState extends State<BriefingPanel> {
   }
 
   Future<void> _generateTtsAndSave() async {
+    final i18n = context.i18n;
     if (_briefing.trim().isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Load briefing first.')));
+      ).showSnackBar(SnackBar(content: Text(i18n.loadBriefingFirst)));
       return;
     }
 
@@ -79,18 +82,16 @@ class _BriefingPanelState extends State<BriefingPanel> {
         return;
       }
       setState(() => _savedAudioPath = file.path);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Generation Complete. Audio saved in app storage.'),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(i18n.ttsGenerationComplete)));
     } catch (error) {
       if (!mounted) {
         return;
       }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('TTS generation failed: $error')));
+      ).showSnackBar(SnackBar(content: Text(i18n.ttsGenerationFailed(error))));
     } finally {
       if (mounted) {
         setState(() => _ttsLoading = false);
@@ -100,6 +101,7 @@ class _BriefingPanelState extends State<BriefingPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.i18n;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
       child: Padding(
@@ -108,21 +110,21 @@ class _BriefingPanelState extends State<BriefingPanel> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Today Briefing',
+              i18n.todayBriefingTitle,
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 8),
-            Text('Provider: ${widget.provider}'),
-            Text('Generated: $_generatedAt'),
-            Text('Event count: $_eventCount'),
+            Text(i18n.providerValue(widget.provider)),
+            Text(i18n.generatedValue(_generatedAt)),
+            Text(i18n.eventCountValue(_eventCount)),
             const SizedBox(height: 8),
             if (_briefing.isEmpty)
-              const Text('No briefing loaded yet.')
+              Text(i18n.noBriefingYet)
             else
               Text(_briefing),
             if (_savedAudioPath.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text('Saved file: $_savedAudioPath'),
+              Text(i18n.savedFileValue(_savedAudioPath)),
             ],
             const SizedBox(height: 10),
             Row(
@@ -131,7 +133,11 @@ class _BriefingPanelState extends State<BriefingPanel> {
                   child: OutlinedButton.icon(
                     onPressed: _loading ? null : _loadBriefing,
                     icon: const Icon(Icons.article_outlined),
-                    label: Text(_loading ? 'Loading...' : 'Load Briefing'),
+                    label: Text(
+                      _loading
+                          ? i18n.loadingBriefingLabel
+                          : i18n.loadBriefingLabel,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -139,7 +145,11 @@ class _BriefingPanelState extends State<BriefingPanel> {
                   child: FilledButton.icon(
                     onPressed: _ttsLoading ? null : _generateTtsAndSave,
                     icon: const Icon(Icons.record_voice_over),
-                    label: Text(_ttsLoading ? 'Generating...' : 'Generate TTS'),
+                    label: Text(
+                      _ttsLoading
+                          ? i18n.generatingTtsLabel
+                          : i18n.generateTtsLabel,
+                    ),
                   ),
                 ),
               ],

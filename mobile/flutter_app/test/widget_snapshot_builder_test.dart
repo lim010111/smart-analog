@@ -58,4 +58,32 @@ void main() {
     expect(snapshot.events.length, 1);
     expect(snapshot.segments, isEmpty);
   });
+
+  test('build keeps zero-duration timed event as solid marker segment', () {
+    final now = DateTime(2026, 3, 1, 10, 0, 0);
+    final events = <CalendarEvent>[
+      CalendarEvent(
+        id: 'event-instant',
+        title: 'Instant Reminder',
+        description: 'Point-in-time event',
+        startTime: DateTime(2026, 3, 1, 5, 30, 0),
+        endTime: DateTime(2026, 3, 1, 5, 30, 0),
+        allDay: false,
+        colorHex: '#10B981',
+        provider: 'google',
+      ),
+    ];
+
+    final snapshot = const WidgetSnapshotBuilder().build(
+      now: now,
+      timezone: 'Asia/Seoul',
+      events: events,
+    );
+
+    expect(snapshot.events.length, 1);
+    expect(snapshot.segments.length, 1);
+    expect(snapshot.segments.first.eventId, 'event-instant');
+    expect(snapshot.segments.first.startAngleDeg, closeTo(75.0, 0.001));
+    expect(snapshot.segments.first.sweepAngleDeg, 0.0);
+  });
 }

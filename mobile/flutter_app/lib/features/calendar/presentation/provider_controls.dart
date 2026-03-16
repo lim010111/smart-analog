@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/localization/app_i18n.dart';
+
 class ProviderControlsWidget extends StatelessWidget {
   const ProviderControlsWidget({
     super.key,
@@ -7,22 +9,31 @@ class ProviderControlsWidget extends StatelessWidget {
     required this.selectedProvider,
     required this.providers,
     required this.providerAuthenticated,
+    required this.providerAccountLabel,
+    required this.providerAccountEmail,
     required this.authFlowBusy,
+    required this.logoutBusy,
     required this.googleRedirectUri,
     required this.appleCredentialBusy,
     required this.appleIdController,
     required this.applePasswordController,
     required this.onProviderChanged,
     required this.onStartGoogleAuth,
+    required this.onSwitchGoogleAccount,
     required this.onSubmitAppleCredentials,
+    required this.onLogoutProvider,
     required this.onRefreshAuthOnly,
+    this.showProviderSelector = true,
   });
 
   final String activeProvider;
   final String selectedProvider;
   final List<String> providers;
   final bool? providerAuthenticated;
+  final String? providerAccountLabel;
+  final String? providerAccountEmail;
   final bool authFlowBusy;
+  final bool logoutBusy;
   final String? googleRedirectUri;
   final bool appleCredentialBusy;
   final TextEditingController appleIdController;
@@ -30,16 +41,20 @@ class ProviderControlsWidget extends StatelessWidget {
 
   final ValueChanged<String?> onProviderChanged;
   final VoidCallback onStartGoogleAuth;
+  final VoidCallback onSwitchGoogleAccount;
   final VoidCallback onSubmitAppleCredentials;
+  final VoidCallback onLogoutProvider;
   final VoidCallback onRefreshAuthOnly;
+  final bool showProviderSelector;
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.i18n;
     final authResolved = providerAuthenticated != null;
     final authOk = providerAuthenticated == true;
     final authLabel = !authResolved
-        ? 'unknown'
-        : (authOk ? 'authenticated' : 'not authenticated');
+        ? i18n.authUnknown
+        : (authOk ? i18n.authAuthenticated : i18n.authNotAuthenticated);
     final authColor = !authResolved
         ? Colors.grey
         : (authOk ? Colors.green : Colors.orange);
@@ -51,25 +66,30 @@ class ProviderControlsWidget extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Provider & Auth Controls',
-                style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              i18n.providerAuthControlsTitle,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                const Text('Provider: '),
-                const SizedBox(width: 8),
-                DropdownButton<String>(
-                  value: selectedProvider,
-                  items: providers
-                      .map((provider) => DropdownMenuItem<String>(
+            if (showProviderSelector)
+              Row(
+                children: [
+                  Text('${i18n.providerLabel}: '),
+                  const SizedBox(width: 8),
+                  DropdownButton<String>(
+                    value: selectedProvider,
+                    items: providers
+                        .map(
+                          (provider) => DropdownMenuItem<String>(
                             value: provider,
                             child: Text(provider),
-                          ))
-                      .toList(),
-                  onChanged: onProviderChanged,
-                ),
-              ],
-            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: onProviderChanged,
+                  ),
+                ],
+              ),
             Card(
               margin: const EdgeInsets.only(top: 8),
               color: authColor.withValues(alpha: 0.10),
@@ -86,7 +106,7 @@ class ProviderControlsWidget extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      'Auth state: $authLabel',
+                      i18n.authStateLabel(authLabel),
                       style: TextStyle(
                         color: authColor,
                         fontWeight: FontWeight.w600,
@@ -96,6 +116,24 @@ class ProviderControlsWidget extends StatelessWidget {
                 ),
               ),
             ),
+            if (authOk)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  i18n.signedInAccountLabel(
+                    providerAccountLabel?.trim().isNotEmpty == true
+                        ? providerAccountLabel!.trim()
+                        : i18n.accountUnknown,
+                  ),
+                ),
+              ),
+            if (authOk &&
+                providerAccountEmail != null &&
+                providerAccountEmail!.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(providerAccountEmail!.trim()),
+              ),
             if (selectedProvider == 'google' && providerAuthenticated != true)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -104,18 +142,26 @@ class ProviderControlsWidget extends StatelessWidget {
                   icon: const Icon(Icons.login),
                   label: Text(
                     authFlowBusy
-                        ? 'Starting Google sign-in...'
-                        : 'Start Google Sign-in',
+                        ? i18n.startingGoogleSignIn
+                        : i18n.startGoogleSignIn,
                   ),
                 ),
               ),
-            if (selectedProvider == 'google' && providerAuthenticated != true)
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: Text(
-                  'Use external browser sign-in, then return to app. '
-                  'Auth status refreshes automatically on resume.',
+            if (selectedProvider == 'google' && providerAuthenticated == true)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: FilledButton.icon(
+                  onPressed: authFlowBusy || logoutBusy
+                      ? null
+                      : onSwitchGoogleAccount,
+                  icon: const Icon(Icons.switch_account),
+                  label: Text(i18n.signInWithAnotherGoogleAccount),
                 ),
+              ),
+            if (selectedProvider == 'google' && providerAuthenticated != true)
+              Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text(i18n.googleSignInHint),
               ),
             if (selectedProvider == 'apple' && providerAuthenticated != true)
               Card(
@@ -125,16 +171,16 @@ class ProviderControlsWidget extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Apple credentials (app-specific password)'),
+                      Text(i18n.appleCredentialsTitle),
                       const SizedBox(height: 8),
                       TextField(
                         controller: appleIdController,
                         keyboardType: TextInputType.emailAddress,
                         autocorrect: false,
                         enableSuggestions: false,
-                        decoration: const InputDecoration(
-                          labelText: 'Apple ID',
-                          hintText: 'name@example.com',
+                        decoration: InputDecoration(
+                          labelText: i18n.appleIdLabel,
+                          hintText: i18n.appleIdHint,
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -143,25 +189,24 @@ class ProviderControlsWidget extends StatelessWidget {
                         obscureText: true,
                         autocorrect: false,
                         enableSuggestions: false,
-                        decoration: const InputDecoration(
-                          labelText: 'App-specific password',
+                        decoration: InputDecoration(
+                          labelText: i18n.appSpecificPasswordLabel,
                         ),
                       ),
                       const SizedBox(height: 10),
                       FilledButton.icon(
-                        onPressed:
-                            appleCredentialBusy ? null : onSubmitAppleCredentials,
+                        onPressed: appleCredentialBusy
+                            ? null
+                            : onSubmitAppleCredentials,
                         icon: const Icon(Icons.lock_open),
                         label: Text(
                           appleCredentialBusy
-                              ? 'Saving Apple credentials...'
-                              : 'Save Apple credentials',
+                              ? i18n.savingAppleCredentialsLabel
+                              : i18n.saveAppleCredentialsLabel,
                         ),
                       ),
                       const SizedBox(height: 6),
-                      const Text(
-                        'Use an Apple app-specific password (not your iCloud login password).',
-                      ),
+                      Text(i18n.applePasswordGuide),
                     ],
                   ),
                 ),
@@ -169,16 +214,29 @@ class ProviderControlsWidget extends StatelessWidget {
             if (googleRedirectUri != null && googleRedirectUri!.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text('Redirect URI: $googleRedirectUri'),
+                child: Text(i18n.redirectUriLabel(googleRedirectUri!)),
               ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: onRefreshAuthOnly,
               icon: const Icon(Icons.verified_user),
-              label: const Text('Refresh auth status'),
+              label: Text(i18n.refreshAuthStatusLabel),
             ),
+            if (providerAuthenticated == true)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: OutlinedButton.icon(
+                  onPressed: logoutBusy ? null : onLogoutProvider,
+                  icon: const Icon(Icons.logout),
+                  label: Text(
+                    logoutBusy
+                        ? i18n.loggingOutProviderLabel
+                        : i18n.logoutProviderLabel,
+                  ),
+                ),
+              ),
             const SizedBox(height: 8),
-            Text('Active Provider: $activeProvider'),
+            Text(i18n.activeProviderLabel(activeProvider)),
           ],
         ),
       ),

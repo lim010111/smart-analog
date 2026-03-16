@@ -1,4 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="widget_home_label">Smart Analog Home Widget</string>
+    <string name="widget_lockstar_label">Smart Analog LockStar Widget</string>
     <string name="widget_description">Smart Analog widget</string>
+    <string name="widget_lockstar_description">Smart Analog LockStar widget</string>
+    <string name="lock_screen_mode_channel_name">Lock Screen Clock Mode</string>
+    <string name="lock_screen_mode_channel_description">Keeps lock-screen clock auto-launch mode active.</string>
+    <string name="lock_screen_mode_notification_title">Lock screen mode active</string>
+    <string name="lock_screen_mode_notification_text">Screen saver clock will relaunch when screen turns on.</string>
+    <string name="lock_screen_wake_alert_channel_name">Lock Screen Wake Alert</string>
+    <string name="lock_screen_wake_alert_channel_description">Urgent launch alerts for lock-screen clock mode.</string>
+    <string name="lock_screen_wake_alert_title">Open lock-screen clock</string>
+    <string name="lock_screen_wake_alert_text">Tap to open Smart Analog screen saver now.</string>
+    <string name="lock_screen_overlay_prompt_text">Tap to open Smart Analog lock screen clock</string>
 </resources>

@@ -24,6 +24,14 @@ class BackendApiClient {
 
   final String baseUrl;
   final http.Client _httpClient;
+  String? _preferredAndroidHost;
+
+  static const Set<String> _androidLocalHosts = <String>{
+    '10.0.2.2',
+    '10.0.0.2',
+    '127.0.0.1',
+    'localhost',
+  };
 
   Uri _buildUri(String path, Map<String, String> query) {
     final normalized = baseUrl.endsWith('/')
@@ -37,19 +45,75 @@ class BackendApiClient {
       return <Uri>[primary];
     }
 
-    final host = primary.host;
-    String? alternateHost;
-    if (host == '10.0.2.2') {
-      alternateHost = '127.0.0.1';
-    } else if (host == '127.0.0.1') {
-      alternateHost = '10.0.2.2';
+    final hosts = <String>[primary.host];
+    if (primary.host == '10.0.2.2') {
+      hosts.addAll(<String>['127.0.0.1', 'localhost']);
+    } else if (primary.host == '10.0.0.2') {
+      hosts.addAll(<String>['10.0.2.2', '127.0.0.1', 'localhost']);
+    } else if (primary.host == '127.0.0.1') {
+      hosts.addAll(<String>['localhost', '10.0.2.2']);
+    } else if (primary.host == 'localhost') {
+      hosts.addAll(<String>['127.0.0.1', '10.0.2.2']);
     }
 
-    if (alternateHost == null) {
-      return <Uri>[primary];
+    final uniqueHosts = <String>[];
+    for (final host in hosts) {
+      if (!uniqueHosts.contains(host)) {
+        uniqueHosts.add(host);
+      }
     }
 
-    return <Uri>[primary, primary.replace(host: alternateHost)];
+    final candidates = uniqueHosts
+        .map((host) => primary.replace(host: host))
+        .toList();
+    final preferred = _preferredAndroidHost;
+    if (preferred == null) {
+      return candidates;
+    }
+
+    final preferredIndex = candidates.indexWhere(
+      (candidate) => candidate.host == preferred,
+    );
+    if (preferredIndex <= 0) {
+      return candidates;
+    }
+
+    final preferredUri = candidates.removeAt(preferredIndex);
+    return <Uri>[preferredUri, ...candidates];
+  }
+
+  Duration _requestTimeoutForCandidate({
+    required Uri candidate,
+    required int candidateIndex,
+    required int candidateCount,
+  }) {
+    final path = candidate.path.toLowerCase();
+    final isAiEndpoint =
+        path.startsWith('/api/events/natural-input/') ||
+        path.startsWith('/api/briefing/');
+    if (isAiEndpoint) {
+      if (Platform.isAndroid && _androidLocalHosts.contains(candidate.host)) {
+        return const Duration(seconds: 25);
+      }
+      return const Duration(seconds: 40);
+    }
+
+    if (Platform.isAndroid && _androidLocalHosts.contains(candidate.host)) {
+      return const Duration(seconds: 3);
+    }
+    if (Platform.isAndroid && candidateCount > 1 && candidateIndex == 0) {
+      return const Duration(seconds: 4);
+    }
+    return const Duration(seconds: 8);
+  }
+
+  void _rememberSuccessfulAndroidHost(Uri candidate) {
+    if (!Platform.isAndroid) {
+      return;
+    }
+    if (_androidLocalHosts.contains(candidate.host)) {
+      _preferredAndroidHost = candidate.host;
+    }
   }
 
   bool _isNetworkException(Object error) {
@@ -63,17 +127,21 @@ class BackendApiClient {
     String provider = 'google',
     int maxResults = 20,
     DateTime? date,
+    bool applyColors = false,
   }) async {
+    final effectiveDate = date ?? DateTime.now();
     final query = <String, String>{
       'provider': provider,
       'max_results': '$maxResults',
+      'tz_offset_minutes': '${effectiveDate.timeZoneOffset.inMinutes}',
     };
     if (date != null) {
-      final yyyy = date.year.toString().padLeft(4, '0');
-      final mm = date.month.toString().padLeft(2, '0');
-      final dd = date.day.toString().padLeft(2, '0');
+      final yyyy = effectiveDate.year.toString().padLeft(4, '0');
+      final mm = effectiveDate.month.toString().padLeft(2, '0');
+      final dd = effectiveDate.day.toString().padLeft(2, '0');
       query['date'] = '$yyyy-$mm-$dd';
     }
+    query['apply_colors'] = applyColors ? 'true' : 'false';
 
     final uri = _buildUri('/api/events/today', query);
     final decoded = await _getJsonObject(uri);
@@ -88,10 +156,13 @@ class BackendApiClient {
 
   Future<ProviderStatusDto> fetchProviderStatus({
     required String provider,
+    bool includeIdentity = false,
   }) async {
-    final uri = _buildUri('/api/providers/status', <String, String>{
+    final query = <String, String>{
       'provider': provider,
-    });
+      if (includeIdentity) 'include_identity': 'true',
+    };
+    final uri = _buildUri('/api/providers/status', query);
     final decoded = await _getJsonObject(uri);
     return ProviderStatusDto.fromJson(decoded);
   }
@@ -154,22 +225,22 @@ class BackendApiClient {
 
   Future<SettingsResponseDto> updateSettings({
     required String theme,
+    required String widgetTheme,
     required int eventOpacity,
     required int clockOpacity,
     required bool briefingEnabled,
     required bool briefingTtsEnabled,
-    required bool widgetPinned,
   }) async {
     final uri = _buildUri('/api/settings', const <String, String>{});
     final decoded = await _putJsonObject(
       uri,
       jsonBody: <String, dynamic>{
         'theme': theme,
+        'widget_theme': widgetTheme,
         'event_opacity': eventOpacity,
         'clock_opacity': clockOpacity,
         'briefing_enabled': briefingEnabled,
         'briefing_tts_enabled': briefingTtsEnabled,
-        'widget_pinned': widgetPinned,
       },
     );
     return SettingsResponseDto.fromJson(decoded);
@@ -352,11 +423,19 @@ class BackendApiClient {
 
   Future<Map<String, dynamic>> _getJsonObject(Uri uri) async {
     Object? lastNetworkError;
-    for (final candidate in _androidCandidateUris(uri)) {
+    final candidates = _androidCandidateUris(uri);
+    for (var i = 0; i < candidates.length; i += 1) {
+      final candidate = candidates[i];
       try {
         final response = await _httpClient
             .get(candidate)
-            .timeout(const Duration(seconds: 8));
+            .timeout(
+              _requestTimeoutForCandidate(
+                candidate: candidate,
+                candidateIndex: i,
+                candidateCount: candidates.length,
+              ),
+            );
 
         final status = response.statusCode;
         final body = response.body;
@@ -371,6 +450,7 @@ class BackendApiClient {
         if (decoded is! Map<String, dynamic>) {
           throw FormatException('Unexpected response format from $candidate');
         }
+        _rememberSuccessfulAndroidHost(candidate);
         return decoded;
       } on Exception catch (error) {
         if (_isNetworkException(error)) {
@@ -393,7 +473,9 @@ class BackendApiClient {
   }) async {
     final payload = jsonBody == null ? null : jsonEncode(jsonBody);
     Object? lastNetworkError;
-    for (final candidate in _androidCandidateUris(uri)) {
+    final candidates = _androidCandidateUris(uri);
+    for (var i = 0; i < candidates.length; i += 1) {
+      final candidate = candidates[i];
       try {
         final response = await _httpClient
             .post(
@@ -403,7 +485,13 @@ class BackendApiClient {
                   : const <String, String>{'Content-Type': 'application/json'},
               body: payload,
             )
-            .timeout(const Duration(seconds: 8));
+            .timeout(
+              _requestTimeoutForCandidate(
+                candidate: candidate,
+                candidateIndex: i,
+                candidateCount: candidates.length,
+              ),
+            );
 
         final status = response.statusCode;
         final body = response.body;
@@ -418,6 +506,7 @@ class BackendApiClient {
         if (decoded is! Map<String, dynamic>) {
           throw FormatException('Unexpected response format from $candidate');
         }
+        _rememberSuccessfulAndroidHost(candidate);
         return decoded;
       } on Exception catch (error) {
         if (_isNetworkException(error)) {
@@ -440,7 +529,9 @@ class BackendApiClient {
   }) async {
     final payload = jsonEncode(jsonBody);
     Object? lastNetworkError;
-    for (final candidate in _androidCandidateUris(uri)) {
+    final candidates = _androidCandidateUris(uri);
+    for (var i = 0; i < candidates.length; i += 1) {
+      final candidate = candidates[i];
       try {
         final response = await _httpClient
             .put(
@@ -450,7 +541,13 @@ class BackendApiClient {
               },
               body: payload,
             )
-            .timeout(const Duration(seconds: 8));
+            .timeout(
+              _requestTimeoutForCandidate(
+                candidate: candidate,
+                candidateIndex: i,
+                candidateCount: candidates.length,
+              ),
+            );
 
         final status = response.statusCode;
         final body = response.body;
@@ -465,6 +562,7 @@ class BackendApiClient {
         if (decoded is! Map<String, dynamic>) {
           throw FormatException('Unexpected response format from $candidate');
         }
+        _rememberSuccessfulAndroidHost(candidate);
         return decoded;
       } on Exception catch (error) {
         if (_isNetworkException(error)) {
@@ -487,7 +585,9 @@ class BackendApiClient {
   }) async {
     final payload = jsonEncode(jsonBody);
     Object? lastNetworkError;
-    for (final candidate in _androidCandidateUris(uri)) {
+    final candidates = _androidCandidateUris(uri);
+    for (var i = 0; i < candidates.length; i += 1) {
+      final candidate = candidates[i];
       try {
         final response = await _httpClient
             .post(
@@ -497,7 +597,13 @@ class BackendApiClient {
               },
               body: payload,
             )
-            .timeout(const Duration(seconds: 8));
+            .timeout(
+              _requestTimeoutForCandidate(
+                candidate: candidate,
+                candidateIndex: i,
+                candidateCount: candidates.length,
+              ),
+            );
 
         if (response.statusCode < 200 || response.statusCode >= 300) {
           throw BackendApiException(
@@ -505,6 +611,7 @@ class BackendApiClient {
             message: _extractErrorMessage(response.body),
           );
         }
+        _rememberSuccessfulAndroidHost(candidate);
         return response;
       } on Exception catch (error) {
         if (_isNetworkException(error)) {

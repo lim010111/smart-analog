@@ -12,16 +12,17 @@ void main() {
     test('parses settings response', () {
       final dto = SettingsResponseDto.fromJson(<String, dynamic>{
         'theme': 'dark',
+        'widget_theme': 'light',
         'event_opacity': 150,
         'clock_opacity': 100,
         'briefing_enabled': true,
         'briefing_tts_enabled': false,
-        'widget_pinned': true,
       });
 
       expect(dto.theme, 'dark');
+      expect(dto.widgetTheme, 'light');
       expect(dto.eventOpacity, 150);
-      expect(dto.widgetPinned, isTrue);
+      expect(dto.briefingEnabled, isTrue);
     });
 
     test('parses provider auth/logout responses', () {

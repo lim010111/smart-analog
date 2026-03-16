@@ -22,11 +22,13 @@ class CalendarEventsRepository {
     String provider = 'google',
     int maxResults = 20,
     DateTime? date,
+    bool applyColors = false,
   }) async {
     final response = await _apiClient.fetchTodayEvents(
       provider: provider,
       maxResults: maxResults,
       date: date,
+      applyColors: applyColors,
     );
 
     return response.events
@@ -35,8 +37,8 @@ class CalendarEventsRepository {
             id: dto.id,
             title: dto.summary,
             description: dto.description,
-            startTime: dto.startTime,
-            endTime: dto.endTime,
+            startTime: dto.startTime.toLocal(),
+            endTime: dto.endTime.toLocal(),
             allDay: dto.allDay,
             colorHex: dto.colorHex.isEmpty ? '#6C757D' : dto.colorHex,
             provider: response.provider,
@@ -50,8 +52,14 @@ class CalendarEventsRepository {
     return _apiClient.fetchProviders();
   }
 
-  Future<ProviderStatusDto> fetchProviderStatus({required String provider}) {
-    return _apiClient.fetchProviderStatus(provider: provider);
+  Future<ProviderStatusDto> fetchProviderStatus({
+    required String provider,
+    bool includeIdentity = false,
+  }) {
+    return _apiClient.fetchProviderStatus(
+      provider: provider,
+      includeIdentity: includeIdentity,
+    );
   }
 
   Future<GoogleAuthUrlResponseDto> fetchGoogleAuthUrl({
@@ -86,19 +94,19 @@ class CalendarEventsRepository {
 
   Future<SettingsResponseDto> updateSettings({
     required String theme,
+    required String widgetTheme,
     required int eventOpacity,
     required int clockOpacity,
     required bool briefingEnabled,
     required bool briefingTtsEnabled,
-    required bool widgetPinned,
   }) {
     return _apiClient.updateSettings(
       theme: theme,
+      widgetTheme: widgetTheme,
       eventOpacity: eventOpacity,
       clockOpacity: clockOpacity,
       briefingEnabled: briefingEnabled,
       briefingTtsEnabled: briefingTtsEnabled,
-      widgetPinned: widgetPinned,
     );
   }
 

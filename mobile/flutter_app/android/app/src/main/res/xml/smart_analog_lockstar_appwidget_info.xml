@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_lockstar_description"
+    android:initialLayout="@layout/smart_analog_lockstar_appwidget"
+    android:initialKeyguardLayout="@layout/smart_analog_lockstar_appwidget"
+    android:minHeight="72dp"
+    android:minWidth="160dp"
+    android:previewImage="@mipmap/ic_launcher"
+    android:resizeMode="none"
+    android:targetCellHeight="1"
+    android:targetCellWidth="3"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen|keyguard" />
