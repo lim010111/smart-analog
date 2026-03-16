@@ -10,6 +10,7 @@ from typing import TypedDict, cast
 class GoogleOAuthPendingRecord(TypedDict):
     redirect_uri: str
     mobile_callback: str | None
+    code_verifier: str | None
     created_at: float
 
 
@@ -41,10 +42,22 @@ class GoogleOAuthPendingStore:
                     state TEXT PRIMARY KEY,
                     redirect_uri TEXT NOT NULL,
                     mobile_callback TEXT,
+                    code_verifier TEXT,
                     created_at REAL NOT NULL
                 )
                 """
             )
+            existing_columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(google_oauth_pending)"
+                ).fetchall()
+                if len(row) > 1
+            }
+            if "code_verifier" not in existing_columns:
+                _ = connection.execute(
+                    "ALTER TABLE google_oauth_pending ADD COLUMN code_verifier TEXT"
+                )
             _ = connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_google_oauth_pending_created_at
@@ -59,6 +72,7 @@ class GoogleOAuthPendingStore:
         state: str,
         redirect_uri: str,
         mobile_callback: str | None,
+        code_verifier: str | None = None,
         created_at: float | None = None,
     ) -> None:
         normalized_state = str(state).strip()
@@ -73,6 +87,11 @@ class GoogleOAuthPendingStore:
             if isinstance(mobile_callback, str) and mobile_callback.strip()
             else None
         )
+        verifier = (
+            str(code_verifier).strip()
+            if isinstance(code_verifier, str) and code_verifier.strip()
+            else None
+        )
         created = float(created_at if created_at is not None else time.time())
 
         with self._lock, self._connect() as connection:
@@ -82,10 +101,17 @@ class GoogleOAuthPendingStore:
                     state,
                     redirect_uri,
                     mobile_callback,
+                    code_verifier,
                     created_at
-                ) VALUES (?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?)
                 """,
-                (normalized_state, normalized_redirect_uri, callback, created),
+                (
+                    normalized_state,
+                    normalized_redirect_uri,
+                    callback,
+                    verifier,
+                    created,
+                ),
             )
             _ = self._delete_expired(connection, now_ts=created)
             connection.commit()
@@ -101,13 +127,16 @@ class GoogleOAuthPendingStore:
             try:
                 cursor = connection.execute(
                     """
-                    SELECT redirect_uri, mobile_callback, created_at
+                    SELECT redirect_uri, mobile_callback, code_verifier, created_at
                     FROM google_oauth_pending
                     WHERE state = ?
                     """,
                     (normalized_state,),
                 )
-                row = cast(tuple[str, str | None, float] | None, cursor.fetchone())
+                row = cast(
+                    tuple[str, str | None, str | None, float] | None,
+                    cursor.fetchone(),
+                )
                 if row is None:
                     _ = self._delete_expired(connection, now_ts=now_ts)
                     connection.commit()
@@ -124,15 +153,19 @@ class GoogleOAuthPendingStore:
                 raise
 
         record = row
-        created_at = float(record[2])
+        created_at = float(record[3])
         if now_ts - created_at > self._ttl_seconds:
             return None
 
         mobile_callback = record[1]
+        code_verifier = record[2]
         return {
             "redirect_uri": str(record[0]),
             "mobile_callback": str(mobile_callback).strip()
             if isinstance(mobile_callback, str) and mobile_callback.strip()
+            else None,
+            "code_verifier": str(code_verifier).strip()
+            if isinstance(code_verifier, str) and code_verifier.strip()
             else None,
             "created_at": created_at,
         }

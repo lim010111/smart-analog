@@ -22,11 +22,11 @@ type ThemeName = "dark" | "light";
 
 interface WebSettings {
   theme: ThemeName;
+  widget_theme: ThemeName;
   event_opacity: number;
   clock_opacity: number;
   briefing_enabled: boolean;
   briefing_tts_enabled: boolean;
-  widget_pinned: boolean;
 }
 
 interface WebEvent {
@@ -96,11 +96,11 @@ interface HoverInfo {
 
 const defaultSettings: WebSettings = {
   theme: "dark",
+  widget_theme: "dark",
   event_opacity: 60,
   clock_opacity: 100,
   briefing_enabled: true,
   briefing_tts_enabled: true,
-  widget_pinned: false,
 };
 
 function asThemeName(val: string | undefined | null): ThemeName {
@@ -727,11 +727,11 @@ export default function Home() {
     const data = await fetchJson<WebSettings>(`${API_BASE_URL}/api/settings`);
     setSettings({
       theme: asThemeName(data.theme),
+      widget_theme: asThemeName(data.widget_theme),
       event_opacity: opacityByteToPercent(Number(data.event_opacity ?? 150)),
       clock_opacity: Number(data.clock_opacity ?? 100),
       briefing_enabled: Boolean(data.briefing_enabled),
       briefing_tts_enabled: Boolean(data.briefing_tts_enabled),
-      widget_pinned: Boolean(data.widget_pinned),
     });
   }, []);
 
@@ -740,6 +740,7 @@ export default function Home() {
       const normalized: WebSettings = {
         ...next,
         theme: asThemeName(next.theme),
+        widget_theme: asThemeName(next.widget_theme),
         event_opacity: opacityPercentToByte(next.event_opacity),
         clock_opacity: Math.min(100, Math.max(0, Math.round(next.clock_opacity))),
       };
@@ -749,11 +750,11 @@ export default function Home() {
       });
       setSettings({
         theme: asThemeName(saved.theme),
+        widget_theme: asThemeName(saved.widget_theme),
         event_opacity: opacityByteToPercent(Number(saved.event_opacity ?? 150)),
         clock_opacity: Number(saved.clock_opacity ?? 100),
         briefing_enabled: Boolean(saved.briefing_enabled),
         briefing_tts_enabled: Boolean(saved.briefing_tts_enabled),
-        widget_pinned: Boolean(saved.widget_pinned),
       });
     },
     [],
@@ -909,7 +910,7 @@ export default function Home() {
   const updateSetting = async (key: keyof WebSettings, val: number | string | boolean) => {
     setMessage("");
     try {
-      if (key === "theme" || key === "briefing_enabled" || key === "briefing_tts_enabled" || key === "widget_pinned") {
+      if (key === "theme" || key === "briefing_enabled" || key === "briefing_tts_enabled") {
         const nextSettings: WebSettings = {
           ...settings,
           [key]: val,
@@ -1231,7 +1232,7 @@ export default function Home() {
       <div className="page-backdrop" />
       <main className="clock-shell">
         <div className="main-content-column" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          <section className={`panel clock-main-panel ${settings.widget_pinned ? "pinned" : ""}`}>
+          <section className="panel clock-main-panel">
             <div className="hero-header">
               <p className="eyebrow">Smart Analog</p>
             </div>
@@ -1355,6 +1356,18 @@ export default function Home() {
                 </select>
               </label>
               <label>
+                위젯 테마
+                <select
+                  value={settings.widget_theme}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                    void updateSetting("widget_theme", asThemeName(e.target.value));
+                  }}
+                >
+                  <option value="dark">다크</option>
+                  <option value="light">화이트</option>
+                </select>
+              </label>
+              <label>
                 일정 투명도 ({settings.event_opacity}%)
                 <input
                   type="range"
@@ -1430,16 +1443,6 @@ export default function Home() {
                   }}
                 />
                 음성 읽기(TTS) 사용
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={settings.widget_pinned}
-                  onChange={(e) => {
-                    void updateSetting("widget_pinned", e.target.checked);
-                  }}
-                />
-                위젯 고정
               </label>
             </div>
                 </div>

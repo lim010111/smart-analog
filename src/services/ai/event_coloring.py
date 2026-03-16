@@ -11,6 +11,7 @@ from src.services.ai.core import (
     read_int_env,
     request_json_or_empty,
 )
+from src.services.ai.core.tracing import traceable_span
 
 
 class AIEventColorService:
@@ -96,6 +97,11 @@ class AIEventColorService:
             return {}
         return self._classify_with_openai(titles)
 
+    @traceable_span(
+        name="ai.event_coloring.classify_titles",
+        run_type="chain",
+        tags=["event-coloring"],
+    )
     def _classify_with_openai(self, titles: list[str]) -> dict[str, str]:
         prompt = {
             "titles": titles,

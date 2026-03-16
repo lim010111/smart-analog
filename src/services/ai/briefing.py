@@ -10,6 +10,7 @@ from src.services.ai.core import (
     read_int_env,
     request_json_or_empty,
 )
+from src.services.ai.core.tracing import traceable_span
 
 
 class AITodayBriefingService:
@@ -28,7 +29,7 @@ class AITodayBriefingService:
             model_env="OPENAI_BRIEFING_MODEL",
             timeout_env="OPENAI_BRIEFING_TIMEOUT",
             default_model="gpt-5-mini",
-            default_timeout=8.0,
+            default_timeout=20.0,
         )
         self._client = OpenAIJSONClient(config)
 
@@ -58,6 +59,11 @@ class AITodayBriefingService:
         self._tts_enabled = bool(enabled)
         self._save_settings()
 
+    @traceable_span(
+        name="ai.briefing.generate_today",
+        run_type="chain",
+        tags=["briefing"],
+    )
     def generate_today_briefing(
         self,
         events: list[CalendarEvent],

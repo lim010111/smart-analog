@@ -4,6 +4,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from src.services.ai.core.tracing import traceable_span, wrap_openai_client
+
 
 class BriefingTTSAdapter:
     def __init__(self):
@@ -100,6 +102,12 @@ class BriefingTTSAdapter:
             self._openai_client = openai_cls(
                 api_key=self._openai_api_key,
                 timeout=self._openai_timeout,
+            )
+            self._openai_client = wrap_openai_client(
+                self._openai_client,
+                component="desktop-tts",
+                tags=["tts", "desktop"],
+                metadata={"model": self._openai_model, "voice": self._openai_voice},
             )
             self._active_backend = "openai"
             self._selected_engine_name = (
@@ -259,6 +267,11 @@ class BriefingTTSAdapter:
             self._unavailable_reason = f"Qt TTS speak failed: {error}"
             return False
 
+    @traceable_span(
+        name="ai.tts.speak_openai",
+        run_type="chain",
+        tags=["tts", "desktop"],
+    )
     def _speak_openai(self, text: str) -> bool:
         client = self._openai_client
         if client is None:

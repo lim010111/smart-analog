@@ -68,7 +68,11 @@ class CalendarService:
             raise RuntimeError("No active calendar provider selected.")
         provider.authenticate()
 
-    def get_todays_events(self, max_results: int = 20) -> list[CalendarEvent]:
+    def get_todays_events(
+        self,
+        max_results: int = 20,
+        apply_ai_colors: bool = True,
+    ) -> list[CalendarEvent]:
         provider = self.active_provider
         if not provider:
             return []
@@ -76,7 +80,7 @@ class CalendarService:
         self._sync_ai_palette_with_provider(provider)
 
         events = provider.get_todays_events(max_results)
-        if not provider.supports_event_color_write():
+        if not provider.supports_event_color_write() or not apply_ai_colors:
             return events
 
         updated_events = self._ai_event_color_service.apply(events)

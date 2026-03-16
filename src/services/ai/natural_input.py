@@ -2,6 +2,7 @@ import datetime
 import re
 from dataclasses import dataclass
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.services.ai.core import (
     OpenAIJSONClient,
@@ -9,8 +10,9 @@ from src.services.ai.core import (
     read_bool_env,
     read_float_env,
     read_int_env,
-    request_json_or_empty,
+    request_json_with_error,
 )
+from src.services.ai.core.tracing import traceable_span
 
 SUPPORTED_INTENTS = {"create", "unknown"}
 GENERIC_TITLE_TOKENS = {
@@ -77,7 +79,69 @@ KOREAN_HOUR_WORDS = {
     "여덟": 8,
     "아홉": 9,
     "열": 10,
+    "열한": 11,
+    "열두": 12,
 }
+
+NATURAL_INPUT_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "name": "natural_input_parse_result",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "intent",
+            "title",
+            "start_time",
+            "end_time",
+            "duration_minutes",
+            "all_day",
+            "confidence",
+        ],
+        "properties": {
+            "intent": {
+                "type": "string",
+                "enum": ["create", "unknown"],
+            },
+            "title": {"type": "string"},
+            "start_time": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"},
+                ]
+            },
+            "end_time": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"},
+                ]
+            },
+            "duration_minutes": {
+                "anyOf": [
+                    {"type": "integer"},
+                    {"type": "null"},
+                ]
+            },
+            "all_day": {"type": "boolean"},
+            "confidence": {"type": "number"},
+        },
+    },
+}
+
+NATURAL_INPUT_SYSTEM_PROMPT = (
+    "Task: extract calendar creation intent from Korean/English user text. "
+    "Return JSON only and follow the schema exactly. "
+    "Rules: "
+    "1) intent must be 'create' or 'unknown'. "
+    "2) If date/time is unclear for reliable creation, set intent='unknown'. "
+    "3) Keep title concise but specific; preserve person/companion context when present. "
+    "4) Use ISO-8601 datetimes with timezone when available; otherwise null. "
+    "5) Extract duration_minutes when duration is explicitly stated. "
+    "6) If duration crosses midnight, end_time must roll over to next day. "
+    "7) Set confidence in [0.0, 1.0] reflecting extraction certainty. "
+    "8) Do not add any keys beyond schema fields."
+)
 
 
 @dataclass(frozen=True)
@@ -110,12 +174,18 @@ class AINaturalInputService:
                 read_float_env("OPENAI_NATURAL_INPUT_MIN_CONFIDENCE", default=0.6),
             ),
         )
+        self.max_output_tokens = max(
+            64,
+            read_int_env("OPENAI_NATURAL_INPUT_MAX_OUTPUT_TOKENS", default=180),
+        )
 
         config = load_openai_config(
             model_env="OPENAI_NATURAL_INPUT_MODEL",
             timeout_env="OPENAI_NATURAL_INPUT_TIMEOUT",
+            reasoning_effort_env="OPENAI_NATURAL_INPUT_REASONING_EFFORT",
             default_model="gpt-5-mini",
             default_timeout=8.0,
+            default_reasoning_effort="minimal",
         )
         self._client = OpenAIJSONClient(config)
 
@@ -129,12 +199,26 @@ class AINaturalInputService:
             return "OPENAI_API_KEY is missing."
         return ""
 
+    @traceable_span(
+        name="ai.natural_input.parse",
+        run_type="chain",
+        tags=["natural-input"],
+    )
     def parse(self, text: str) -> NaturalInputParseResult | None:
         normalized = str(text).strip()
         if not normalized:
             return None
         if not self.is_ready():
             return None
+
+        if self._is_local_fast_path_candidate(normalized):
+            fast_local = self._parse_with_local_rules(
+                normalized,
+                upstream_note="",
+                mode="fast",
+            )
+            if fast_local is not None:
+                return fast_local
 
         payload = {
             "text": normalized[: self.max_input_chars],
@@ -177,29 +261,46 @@ class AINaturalInputService:
             ],
         }
 
-        data = request_json_or_empty(
+        data, request_error = request_json_with_error(
             self._client,
-            system_prompt=(
-                "Task: extract calendar creation intent from Korean/English user text. "
-                "Return JSON only and follow the schema exactly. "
-                "Rules: "
-                "1) intent must be 'create' or 'unknown'. "
-                "2) If date/time is unclear for reliable creation, set intent='unknown'. "
-                "3) Keep title concise but specific; preserve person/companion context when present. "
-                "4) Use ISO-8601 datetimes with timezone when available; otherwise null. "
-                "5) Extract duration_minutes when duration is explicitly stated. "
-                "6) If duration crosses midnight, end_time must roll over to next day. "
-                "7) Set confidence in [0.0, 1.0] reflecting extraction certainty. "
-                "8) Do not add any keys beyond schema fields."
-            ),
+            system_prompt=NATURAL_INPUT_SYSTEM_PROMPT,
             user_payload=payload,
-            max_output_tokens=700,
+            max_output_tokens=self.max_output_tokens,
             model=self._client.config.model,
+            text_format=NATURAL_INPUT_RESPONSE_FORMAT,
         )
         if not data:
+            fallback_data: dict[str, Any] = {}
+            fallback_error: str | None = None
+            if self._should_retry_without_schema(request_error):
+                fallback_data, fallback_error = request_json_with_error(
+                    self._client,
+                    system_prompt=NATURAL_INPUT_SYSTEM_PROMPT,
+                    user_payload=payload,
+                    max_output_tokens=min(self.max_output_tokens + 60, 300),
+                    model=self._client.config.model,
+                )
+                if fallback_data:
+                    return self._to_result(normalized, fallback_data)
+
+            failures = [
+                str(value).strip()
+                for value in (request_error, fallback_error)
+                if str(value).strip()
+            ]
+            note = " | ".join(dict.fromkeys(failures))
+            local_result = self._parse_with_local_rules(
+                normalized,
+                note,
+                mode="fallback",
+            )
+            if local_result is not None:
+                return local_result
+            if not note:
+                note = "AI response was empty or invalid JSON."
             return self._unknown_result(
                 raw={},
-                note="AI response was empty or invalid JSON.",
+                note=note,
             )
 
         return self._to_result(normalized, data)
@@ -282,6 +383,320 @@ class AINaturalInputService:
             raw=data,
             note="; ".join(note_parts) if note_parts else None,
         )
+
+    def _parse_with_local_rules(
+        self,
+        source_text: str,
+        upstream_note: str,
+        mode: str,
+    ) -> NaturalInputParseResult | None:
+        normalized_source = self._normalize_local_text_for_time(source_text)
+        parsed_range = self._extract_local_korean_time_range(normalized_source)
+        if parsed_range is None:
+            parsed_range = self._extract_local_start_with_duration(normalized_source)
+        if parsed_range is None:
+            return None
+
+        start_time, end_time, span_text = parsed_range
+        title = self._extract_local_title(normalized_source, span_text)
+        if not title:
+            return None
+
+        local_raw = {
+            "intent": "create",
+            "title": title,
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "duration_minutes": max(
+                1,
+                int((end_time - start_time).total_seconds() // 60),
+            ),
+            "all_day": False,
+            "confidence": max(self.min_confidence, 0.72),
+        }
+        base_result = self._to_result(normalized_source, local_raw)
+        if base_result.intent != "create":
+            return None
+
+        mode_label = "Local rule fast path used"
+        if mode != "fast":
+            mode_label = "Local rule fallback used after AI parse failure"
+
+        note_parts = [
+            mode_label,
+            f"AI error: {upstream_note}" if upstream_note else "",
+            base_result.note or "",
+        ]
+        merged_note = "; ".join(part for part in note_parts if part)
+
+        return NaturalInputParseResult(
+            intent=base_result.intent,
+            title=base_result.title,
+            start_time=base_result.start_time,
+            end_time=base_result.end_time,
+            all_day=base_result.all_day,
+            confidence=base_result.confidence,
+            raw=local_raw,
+            note=merged_note or None,
+        )
+
+    @staticmethod
+    def _resolve_local_relative_date(
+        source_text: str, tzinfo: datetime.tzinfo
+    ) -> datetime.date:
+        normalized = source_text.replace(" ", "")
+        today = datetime.datetime.now(tzinfo).date()
+        if "글피" in normalized:
+            return today + datetime.timedelta(days=3)
+        if "모레" in normalized:
+            return today + datetime.timedelta(days=2)
+        if "내일" in normalized:
+            return today + datetime.timedelta(days=1)
+        return today
+
+    @staticmethod
+    def _preferred_local_timezone(source_text: str) -> datetime.tzinfo:
+        if re.search(r"[가-힣]", source_text):
+            return ZoneInfo("Asia/Seoul")
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+        return local_tz or datetime.timezone.utc
+
+    @staticmethod
+    def _to_local_clock(
+        hour: int,
+        minute: int,
+        meridiem: str | None,
+        source_text: str,
+    ) -> tuple[int, int]:
+        normalized_meridiem = AINaturalInputService._infer_meridiem_from_context(
+            source_text,
+            hour,
+            meridiem,
+        )
+        base_hour = int(hour)
+        base_minute = int(minute)
+
+        if normalized_meridiem == "오전":
+            if base_hour == 12:
+                return (0, base_minute)
+            return (base_hour, base_minute)
+
+        if normalized_meridiem == "오후":
+            if base_hour == 12:
+                return (12, base_minute)
+            return (base_hour + 12, base_minute)
+
+        if base_hour >= 24:
+            return (base_hour % 24, base_minute)
+        return (base_hour, base_minute)
+
+    @staticmethod
+    def _infer_meridiem_from_context(
+        source_text: str,
+        hour: int,
+        meridiem: str | None,
+    ) -> str:
+        explicit = (meridiem or "").strip()
+        if explicit in {"오전", "오후"}:
+            return explicit
+
+        text = str(source_text)
+        if "새벽" in text or "아침" in text:
+            return "오전"
+        if "오후" in text or "저녁" in text or "밤" in text:
+            return "오후"
+        if hour == 12:
+            return "오후"
+        if 1 <= hour <= 7:
+            return "오후"
+        return ""
+
+    def _extract_local_korean_time_range(
+        self, source_text: str
+    ) -> tuple[datetime.datetime, datetime.datetime, str] | None:
+        pattern = re.compile(
+            r"(?P<start_ampm>오전|오후)?\s*(?P<start_hour>\d{1,2})시"
+            r"(?P<start_half>반)?(?:(?P<start_min>\d{1,2})분)?\s*(?:부터|~|-)\s*"
+            r"(?P<end_ampm>오전|오후)?\s*(?P<end_hour>\d{1,2})시"
+            r"(?P<end_half>반)?(?:(?P<end_min>\d{1,2})분)?\s*(?:까지)?"
+        )
+        matched = pattern.search(source_text)
+        if matched is None:
+            return None
+
+        start_minute = int(matched.group("start_min") or "0")
+        end_minute = int(matched.group("end_min") or "0")
+        if matched.group("start_half"):
+            start_minute += 30
+        if matched.group("end_half"):
+            end_minute += 30
+
+        start_ampm = matched.group("start_ampm")
+        end_ampm = matched.group("end_ampm")
+        if not end_ampm:
+            if start_ampm == "오전" and int(matched.group("end_hour")) == 12:
+                end_ampm = "오후"
+            else:
+                end_ampm = start_ampm
+
+        start_hour, start_minute = self._to_local_clock(
+            int(matched.group("start_hour")),
+            start_minute,
+            start_ampm,
+            source_text,
+        )
+        end_hour, end_minute = self._to_local_clock(
+            int(matched.group("end_hour")),
+            end_minute,
+            end_ampm,
+            source_text,
+        )
+
+        tzinfo = self._preferred_local_timezone(source_text)
+        target_date = self._resolve_local_relative_date(source_text, tzinfo)
+        start_time = datetime.datetime.combine(
+            target_date,
+            datetime.time(hour=start_hour, minute=start_minute),
+            tzinfo=tzinfo,
+        )
+        end_time = datetime.datetime.combine(
+            target_date,
+            datetime.time(hour=end_hour, minute=end_minute),
+            tzinfo=tzinfo,
+        )
+
+        if end_time <= start_time:
+            end_time += datetime.timedelta(days=1)
+
+        return (start_time, end_time, matched.group(0))
+
+    def _extract_local_start_with_duration(
+        self, source_text: str
+    ) -> tuple[datetime.datetime, datetime.datetime, str] | None:
+        pattern = re.compile(
+            r"(?P<ampm>오전|오후)?\s*(?P<hour>\d{1,2})시"
+            r"(?P<half>반)?(?:(?P<minute>\d{1,2})분)?\s*(?:에)?"
+        )
+        matched = pattern.search(source_text)
+        if matched is None:
+            return None
+
+        span_text = matched.group(0)
+        if "부터" in source_text[max(0, matched.start() - 4) : matched.end() + 4]:
+            return None
+
+        minute = int(matched.group("minute") or "0")
+        if matched.group("half"):
+            minute += 30
+
+        hour, minute = self._to_local_clock(
+            int(matched.group("hour")),
+            minute,
+            matched.group("ampm"),
+            source_text,
+        )
+        tzinfo = self._preferred_local_timezone(source_text)
+        target_date = self._resolve_local_relative_date(source_text, tzinfo)
+        start_time = datetime.datetime.combine(
+            target_date,
+            datetime.time(hour=hour, minute=minute),
+            tzinfo=tzinfo,
+        )
+
+        duration_minutes = self._extract_duration_minutes(source_text)
+        if duration_minutes is None:
+            without_time = source_text.replace(span_text, " ")
+            minute_match = re.search(r"(?P<mins>\d{1,3})분", without_time)
+            if minute_match:
+                duration_minutes = int(minute_match.group("mins"))
+        if duration_minutes is None:
+            duration_minutes = self.default_duration_minutes
+        end_time = start_time + datetime.timedelta(minutes=duration_minutes)
+        return (start_time, end_time, span_text)
+
+    @staticmethod
+    def _extract_local_title(source_text: str, time_span_text: str) -> str:
+        title = source_text.replace(time_span_text, " ")
+        for token in ("오늘", "내일", "모레", "글피", "오전", "오후", "부터", "까지"):
+            title = title.replace(token, " ")
+        title = re.sub(
+            r"\d{1,2}시간(?:반)?(?:\d{1,2}분)?|"
+            r"(한|하나|두|둘|세|셋|네|넷|다섯|여섯|일곱|여덟|아홉|열)시간(?:반)?(?:\d{1,2}분)?|"
+            r"\d{1,3}분",
+            " ",
+            title,
+        )
+        title = re.sub(
+            r"\s*(일정\s*)?(추가해줘|추가해 줘|추가|생성해줘|생성해 줘|만들어줘|만들어 줘|등록해줘|등록해 줘)\s*$",
+            "",
+            title,
+        )
+        title = re.sub(
+            r"\s*(보기로|보기|만나기로|만나기|만남)\s*$",
+            "",
+            title,
+        )
+        title = re.sub(r"\s+", " ", title).strip(" .,!?")
+        return title[:80].strip()
+
+    @staticmethod
+    def _should_retry_without_schema(request_error: str | None) -> bool:
+        if not request_error:
+            return False
+        text = str(request_error).strip().lower()
+        if not text:
+            return False
+
+        schema_hints = (
+            "json_schema",
+            "schema",
+            "text.format",
+            "response format",
+            "unknown parameter",
+            "invalid type",
+            "unsupported",
+        )
+        return any(hint in text for hint in schema_hints)
+
+    @staticmethod
+    def _is_local_fast_path_candidate(source_text: str) -> bool:
+        text = str(source_text).strip()
+        if not text:
+            return False
+        if not re.search(r"[가-힣]", text):
+            return False
+
+        has_time = bool(
+            re.search(
+                r"(오늘|내일|모레|글피|다음주|이번주|다다음주|"
+                r"월요일|화요일|수요일|목요일|금요일|토요일|일요일|"
+                r"오전|오후|\d{1,2}\s*시|한\s*시|두\s*시|세\s*시|네\s*시)",
+                text,
+            )
+        )
+        if not has_time:
+            return False
+
+        has_event_context = bool(
+            re.search(
+                r"(랑|와|과|약속|회의|미팅|알바|보기|만나|식사|점심|저녁|운동|스터디|일정)",
+                text,
+            )
+        )
+        return has_event_context
+
+    @staticmethod
+    def _normalize_local_text_for_time(source_text: str) -> str:
+        normalized = str(source_text)
+        replacements = sorted(
+            KOREAN_HOUR_WORDS.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+        for word, hour in replacements:
+            pattern = re.compile(rf"(?<![가-힣A-Za-z0-9]){re.escape(word)}\s*시")
+            normalized = pattern.sub(f"{hour}시", normalized)
+        return normalized
 
     def _enrich_title(self, source_text: str, title: str) -> tuple[str, str | None]:
         normalized_title = str(title).strip()

@@ -29,6 +29,7 @@ from .google_oauth_pending_store import (
 
 from src.services.ai.briefing import AITodayBriefingService
 from src.services.ai.color_schema import ColorRule
+from src.services.ai.core.tracing import traceable_span, wrap_openai_client
 from src.services.calendar import CalendarService
 from src.services.providers.apple_provider import AppleCalendarProvider
 from src.services.providers.google_provider import (
@@ -57,6 +58,8 @@ class ProvidersResponse(BaseModel):
 class ProviderStatusResponse(BaseModel):
     provider: str
     authenticated: bool
+    account_label: str | None = None
+    account_email: str | None = None
 
 
 class GoogleAuthUrlResponse(BaseModel):
@@ -125,20 +128,20 @@ class AppleCredentialsRequest(BaseModel):
 
 class WebSettingsRequest(BaseModel):
     theme: str = Field(default="dark")
+    widget_theme: str = Field(default="dark")
     event_opacity: int = Field(default=150, ge=0, le=255)
     clock_opacity: int = Field(default=100, ge=0, le=100)
     briefing_enabled: bool = True
     briefing_tts_enabled: bool = False
-    widget_pinned: bool = True
 
 
 WEB_SETTINGS: dict[str, object] = {
     "theme": os.getenv("WEB_THEME_DEFAULT", "dark"),
+    "widget_theme": os.getenv("WEB_WIDGET_THEME_DEFAULT", "dark"),
     "event_opacity": 150,
     "clock_opacity": 100,
     "briefing_enabled": True,
     "briefing_tts_enabled": False,
-    "widget_pinned": True,
 }
 
 
@@ -201,6 +204,26 @@ def _day_range_local(target_date: dt.date) -> tuple[dt.datetime, dt.datetime]:
     start_of_day = dt.datetime.combine(target_date, dt.time.min, tzinfo=local_tz)
     end_of_day = dt.datetime.combine(target_date, dt.time.max, tzinfo=local_tz)
     return start_of_day, end_of_day
+
+
+def _timezone_from_offset_minutes(offset_minutes: int | None) -> dt.tzinfo:
+    if offset_minutes is None:
+        local_tz = dt.datetime.now().astimezone().tzinfo
+        if local_tz is None:
+            return dt.timezone.utc
+        return local_tz
+
+    return dt.timezone(dt.timedelta(minutes=int(offset_minutes)))
+
+
+def _day_range_for_client_timezone(
+    target_date: dt.date,
+    offset_minutes: int | None,
+) -> tuple[dt.datetime, dt.datetime]:
+    tzinfo = _timezone_from_offset_minutes(offset_minutes)
+    start_of_day = dt.datetime.combine(target_date, dt.time.min, tzinfo=tzinfo)
+    end_exclusive = start_of_day + dt.timedelta(days=1)
+    return start_of_day, end_exclusive
 
 
 def _today_range_local() -> tuple[dt.datetime, dt.datetime]:
@@ -307,6 +330,15 @@ def _normalize_theme(value: str) -> str:
     lowered = str(value).strip().lower()
     if lowered in {"dark", "light"}:
         return lowered
+    return "dark"
+
+
+def _normalize_widget_theme(value: str) -> str:
+    lowered = str(value).strip().lower()
+    if lowered in {"light", "white"}:
+        return "light"
+    if lowered == "dark":
+        return "dark"
     return "dark"
 
 
@@ -683,6 +715,11 @@ def _mime_type_for_audio(fmt: str) -> str:
     return "application/octet-stream"
 
 
+@traceable_span(
+    name="web.ai.tts.synthesize_openai",
+    run_type="chain",
+    tags=["tts", "web-backend"],
+)
 def _synthesize_openai_tts(payload: BriefingTTSRequest) -> tuple[bytes, str]:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
@@ -692,7 +729,7 @@ def _synthesize_openai_tts(payload: BriefingTTSRequest) -> tuple[bytes, str]:
         )
 
     fmt = _normalize_response_format(payload.response_format)
-    timeout = float(os.getenv("OPENAI_TTS_TIMEOUT", "15") or "15")
+    timeout = float(os.getenv("OPENAI_TTS_TIMEOUT", "30") or "30")
     model = (
         str(payload.model or "").strip()
         or os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip()
@@ -709,6 +746,12 @@ def _synthesize_openai_tts(payload: BriefingTTSRequest) -> tuple[bytes, str]:
         module = importlib.import_module("open" + "ai")
         openai_cls = getattr(module, "OpenAI")
         client = openai_cls(api_key=api_key, timeout=timeout)
+        client = wrap_openai_client(
+            client,
+            component="web-backend-tts",
+            tags=["tts", "web-backend"],
+            metadata={"model": model, "voice": voice},
+        )
     except Exception as error:
         raise HTTPException(
             status_code=500,
@@ -780,7 +823,12 @@ def providers() -> ProvidersResponse:
 @app.get("/api/providers/status", response_model=ProviderStatusResponse)
 def provider_status(
     provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
+    include_identity: bool = Query(default=False),
 ) -> ProviderStatusResponse:
+    authenticated = False
+    active = None
+    account_label: str | None = None
+    account_email: str | None = None
     try:
         calendar = _build_calendar_service(provider)
         active = calendar.active_provider
@@ -793,7 +841,25 @@ def provider_status(
             authenticated = False
     except Exception:
         authenticated = False
-    return ProviderStatusResponse(provider=provider, authenticated=authenticated)
+
+    if include_identity and authenticated and active is not None:
+        try:
+            identity_fetcher = getattr(active, "get_authenticated_identity", None)
+            identity = identity_fetcher() if callable(identity_fetcher) else None
+            if isinstance(identity, dict):
+                raw_label = str(identity.get("label", "") or "").strip()
+                raw_email = str(identity.get("email", "") or "").strip()
+                account_label = raw_label or None
+                account_email = raw_email or None
+        except Exception:
+            pass
+
+    return ProviderStatusResponse(
+        provider=provider,
+        authenticated=authenticated,
+        account_label=account_label,
+        account_email=account_email,
+    )
 
 
 @app.post("/api/providers/authenticate")
@@ -836,13 +902,19 @@ def google_auth_url(
 
         auth_url, state = flow.authorization_url(
             access_type="offline",
-            include_granted_scopes="true",
             prompt="consent",
+        )
+        code_verifier_raw = getattr(flow, "code_verifier", None)
+        code_verifier = (
+            str(code_verifier_raw).strip()
+            if isinstance(code_verifier_raw, str) and code_verifier_raw.strip()
+            else None
         )
     GOOGLE_OAUTH_PENDING_STORE.put(
         state=state,
         redirect_uri=redirect_uri,
         mobile_callback=mobile_callback_uri,
+        code_verifier=code_verifier,
     )
 
     return GoogleAuthUrlResponse(
@@ -887,6 +959,12 @@ def google_auth_callback(
         if isinstance(mobile_callback_uri_raw, str)
         else ""
     )
+    code_verifier_raw = pending.get("code_verifier")
+    code_verifier = (
+        str(code_verifier_raw).strip()
+        if isinstance(code_verifier_raw, str) and code_verifier_raw.strip()
+        else None
+    )
     if not redirect_uri:
         return HTMLResponse(
             content=_google_callback_html(
@@ -907,6 +985,8 @@ def google_auth_callback(
                 state=received_state,
             )
             flow.redirect_uri = redirect_uri
+            if code_verifier:
+                flow.code_verifier = code_verifier
             flow.fetch_token(authorization_response=_build_public_request_url(request))
 
         if not flow.credentials.has_scopes(GOOGLE_SCOPES):
@@ -918,27 +998,37 @@ def google_auth_callback(
         with open(token_path, "wb") as token_file:
             pickle.dump(flow.credentials, token_file)
     except Exception as error:
+        raw_error_message = str(error)
+        user_error_message = f"Google 인증 토큰 저장 실패: {raw_error_message}"
+        if "Scope has changed" in raw_error_message:
+            user_error_message = (
+                "Google 권한 범위가 기존 인증 정보와 달라 인증에 실패했습니다. "
+                "다시 인증을 진행하면 자동으로 최신 권한으로 갱신됩니다."
+            )
+        if "Missing code verifier" in raw_error_message:
+            user_error_message = (
+                "Google 인증 세션 검증 정보가 누락되었습니다. "
+                "앱에서 로그인 과정을 다시 시작해 주세요."
+            )
         if mobile_callback_uri:
             callback_url = _append_query_params(
                 mobile_callback_uri,
                 {
                     "status": "error",
                     "provider": "google",
-                    "message": f"Google 인증 토큰 저장 실패: {error}",
+                    "message": user_error_message,
                 },
             )
             return HTMLResponse(
                 content=_google_callback_mobile_redirect_html(
                     callback_url,
                     False,
-                    f"Google 인증 토큰 저장 실패: {error}",
+                    user_error_message,
                 ),
                 status_code=400,
             )
         return HTMLResponse(
-            content=_google_callback_html(
-                False, f"Google 인증 토큰 저장 실패: {error}"
-            ),
+            content=_google_callback_html(False, user_error_message),
             status_code=400,
         )
 
@@ -1003,22 +1093,22 @@ def logout_provider(
 def get_settings() -> dict[str, object]:
     return {
         "theme": WEB_SETTINGS["theme"],
+        "widget_theme": WEB_SETTINGS["widget_theme"],
         "event_opacity": WEB_SETTINGS["event_opacity"],
         "clock_opacity": WEB_SETTINGS["clock_opacity"],
         "briefing_enabled": WEB_SETTINGS["briefing_enabled"],
         "briefing_tts_enabled": WEB_SETTINGS["briefing_tts_enabled"],
-        "widget_pinned": WEB_SETTINGS["widget_pinned"],
     }
 
 
 @app.put("/api/settings")
 def update_settings(request: WebSettingsRequest) -> dict[str, object]:
     WEB_SETTINGS["theme"] = _normalize_theme(request.theme)
+    WEB_SETTINGS["widget_theme"] = _normalize_widget_theme(request.widget_theme)
     WEB_SETTINGS["event_opacity"] = int(request.event_opacity)
     WEB_SETTINGS["clock_opacity"] = int(request.clock_opacity)
     WEB_SETTINGS["briefing_enabled"] = bool(request.briefing_enabled)
     WEB_SETTINGS["briefing_tts_enabled"] = bool(request.briefing_tts_enabled)
-    WEB_SETTINGS["widget_pinned"] = bool(request.widget_pinned)
     return get_settings()
 
 
@@ -1027,6 +1117,8 @@ def today_events(
     provider: str = Query(default=os.getenv("WEB_DEFAULT_PROVIDER", "google")),
     max_results: int = Query(default=20, ge=1, le=200),
     date: str | None = Query(default=None),
+    tz_offset_minutes: int | None = Query(default=None, ge=-840, le=840),
+    apply_colors: bool = Query(default=True),
 ) -> TodayEventsResponse:
     target_date = dt.datetime.now().astimezone().date()
     if date:
@@ -1038,7 +1130,10 @@ def today_events(
     try:
         calendar = _build_calendar_service(provider)
         _require_provider_credentials(calendar)
-        start_of_day, end_of_day = _day_range_local(target_date)
+        start_of_day, end_of_day = _day_range_for_client_timezone(
+            target_date,
+            tz_offset_minutes,
+        )
         active_provider = calendar.active_provider
         if active_provider is None:
             raise HTTPException(
@@ -1052,7 +1147,7 @@ def today_events(
             max_results=max_results,
             page_size=min(max_results, 250),
         )
-        if calendar.can_write_event_colors() and events:
+        if apply_colors and calendar.can_write_event_colors() and events:
             calendar.ai_event_color_service.apply(events)
             active_provider.write_event_colors(events)
 
@@ -1186,23 +1281,16 @@ def create_event_from_natural_input(
 
         created = calendar.create_event_from_natural_input(parsed)
         if not created:
-            return {
-                "provider": provider,
-                "parsed": {
-                    "intent": parsed.intent,
-                    "title": parsed.title,
-                    "start_time": (
-                        parsed.start_time.isoformat() if parsed.start_time else None
-                    ),
-                    "end_time": parsed.end_time.isoformat()
-                    if parsed.end_time
-                    else None,
-                    "all_day": parsed.all_day,
-                    "confidence": parsed.confidence,
-                    "note": parsed.note,
-                },
-                "created": None,
-            }
+            detail = "자연어 입력으로 일정을 생성하지 못했습니다."
+            if parsed.intent != "create":
+                detail = "AI가 일정 생성 의도로 해석하지 못했습니다."
+            elif not parsed.title.strip():
+                detail = "일정 제목을 추출하지 못했습니다."
+            elif parsed.start_time is None or parsed.end_time is None:
+                detail = "일정 시작/종료 시간을 추출하지 못했습니다."
+            if parsed.note:
+                detail = f"{detail} ({parsed.note})"
+            raise HTTPException(status_code=400, detail=detail)
 
         return {
             "provider": provider,
@@ -1245,7 +1333,10 @@ def today_briefing(
 
         calendar = _build_calendar_service(provider)
         _require_provider_credentials(calendar)
-        events = calendar.get_todays_events(max_results=max_results)
+        events = calendar.get_todays_events(
+            max_results=max_results,
+            apply_ai_colors=False,
+        )
 
         briefing_service = AITodayBriefingService()
         text = briefing_service.generate_today_briefing(

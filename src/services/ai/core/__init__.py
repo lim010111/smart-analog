@@ -18,7 +18,7 @@ from src.services.ai.core.errors import (
     OpenAIResponseFormatError,
 )
 from src.services.ai.core.json_utils import parse_json_object
-from src.services.ai.core.workflow import request_json_or_empty
+from src.services.ai.core.workflow import request_json_or_empty, request_json_with_error
 
 __all__ = [
     "EventContext",
@@ -33,6 +33,7 @@ __all__ = [
     "load_openai_config",
     "parse_json_object",
     "request_json_or_empty",
+    "request_json_with_error",
     "read_bool_env",
     "read_float_env",
     "read_int_env",
