@@ -1,241 +1,109 @@
-# Mobile UI Agent Handoff (Zero-Base)
+# Mobile UI Agent Handoff
 
-Last updated: 2026-02-27
-Branch: `feature/mobile-flutter-foundation`
-Primary goal: fully migrate web analog-clock MVP features to mobile app UI, then release Android first and iOS second.
+Status: Historical snapshot (2026-03-06)
 
-## 0) Mission and Stop Rule
+Last updated: 2026-03-06
+Scope: Android-first mobile completion, then iOS validation
 
-You are a UI-focused implementer with zero prior context.
+## 1) Goal
 
-Your mission:
-1. Build Flutter UI for full MVP feature parity using existing mobile service/repository methods.
-2. Do not change backend/mobile contracts unless a hard blocker is proven.
-3. Keep widget boundary strict: app handles auth/network; widget reads snapshot artifact only.
+- Keep app clock and widget clock behavior coherent with web intent.
+- Complete Android hardening first, then finish iOS widget verification.
+- Latest delivered feature: native widget "Today mini event list" (Android + iOS) while preserving analog clock.
 
-Mandatory stop rule:
-- Before writing substantial UI code, post a short implementation plan and wait for human confirmation.
-- After each major UI milestone (Settings, Event/Natural Input, Briefing/TTS, Colors), post progress.
+## 2) Current Product State
 
-## 1) Read These First (Order)
+- Android app + home widget flow is implemented and build-verified.
+- iOS widget code is implemented but still requires macOS/Xcode runtime validation.
+- Auth persistence issue from repeated relogin was fixed by stable credential file path resolution.
+- Refresh/date navigation reliability was improved (request flow + timeout/fallback handling).
+- `widget_pinned` was removed end-to-end because it had no meaningful runtime function.
 
-1. `mobile/flutter_app/AGENTS.md`
-2. `mobile/flutter_app/lib/features/calendar/presentation/mobile_home_screen.dart`
-3. `mobile/flutter_app/lib/features/calendar/data/calendar_events_repository.dart`
-4. `mobile/flutter_app/lib/integrations/backend_api/api_client.dart`
-5. `web/frontend/src/app/page.tsx`
-6. `web/frontend/src/app/settings/color-schema/page.tsx`
-7. `web/backend/app/main.py`
+## 3) What Was Completed
 
-## 2) Environment Bootstrap (Exact Commands)
+### Auth and provider persistence
 
-From repo root:
+- `src/services/providers/google_provider.py`
+- `src/services/providers/apple_provider.py`
+- Stable resolved paths prevent re-auth churn from changing run directories.
 
-```bash
-cd /home/shine/projects/clock_widget/mobile/flutter_app
-flutter pub get
-flutter analyze
-flutter test
-flutter run
-```
+### Refresh/date navigation hardening
 
-If testing with local backend:
+- `mobile/flutter_app/lib/integrations/backend_api/api_client.dart`
+- `mobile/flutter_app/lib/features/calendar/data/calendar_events_repository.dart`
+- `mobile/flutter_app/lib/features/calendar/presentation/mobile_home_screen.dart`
+- Fixed endpoint misuse (`max_results=250` -> backend limit is `<=200`) and improved timeout/fallback behavior.
 
-```bash
-cd /home/shine/projects/clock_widget
-uv run uvicorn web.backend.app.main:app --host 0.0.0.0 --port 8000
-```
+### Clock/touch and UI parity work
 
-Android real device in this repo often uses adb bridge helper:
+- `mobile/flutter_app/lib/features/calendar/presentation/analog_clock_card.dart`
+- Better event hit behavior for overlap scenarios and app clock rendering parity.
 
-```bash
-source ~/.zshrc
-cw-adb reverse tcp:8000 tcp:8000
-cw-flutter-run
-```
+### Android widget updates
 
-## 3) Already Implemented (Do Not Redo)
+- `mobile/flutter_app/android/app/src/main/res/layout/smart_analog_appwidget.xml`
+- `mobile/flutter_app/android/app/src/main/kotlin/com/smartanalog/flutter_app/SmartAnalogAppWidgetProvider.kt`
+- `mobile/flutter_app/android/app/src/main/res/xml/smart_analog_appwidget_info.xml`
+- `mobile/flutter_app/android/app/src/main/AndroidManifest.xml`
+- `mobile/flutter_app/android/app/src/main/kotlin/com/smartanalog/flutter_app/MainActivity.kt`
+- Added mini-list block: title + up to 3 event rows with time/all-day formatting.
 
-### Auth/callback stability
-- Google deep-link callback is wired (`smartanalog://auth/google`).
-- Backend mobile callback pending-state is persisted (SQLite), not in-memory only.
+### iOS widget updates
 
-### Existing foundation UI (extend this, do not duplicate)
-- Current primary UI entry is already implemented at:
-  - `mobile/flutter_app/lib/app/app.dart`
-  - `mobile/flutter_app/lib/features/calendar/presentation/mobile_home_screen.dart`
-- Refactor and extend existing screen/modules instead of creating parallel duplicate auth/provider plumbing.
+- `mobile/flutter_app/ios/WidgetExtension/SmartAnalogWidget.swift`
+- Added parsed event preview model and family-aware row rendering:
+  - small: up to 1 event
+  - medium: up to 2 events
+  - large: up to 3 events
 
-### Contract hardening
-- Existing DTO parsing is strict (FormatException on drift).
-- Core regression tests exist.
+### Contract cleanup (`widget_pinned` removal)
 
-### Widget storage boundary
-- App writes both:
-  - `widget_snapshot.json`
-  - `widget_snapshot_read_v1.json`
-- Widget consumes read artifact only.
+- Backend: `web/backend/app/main.py`
+- Web: `web/frontend/src/app/page.tsx`, `web/frontend/src/app/globals.css`
+- Mobile DTO/UI/tests: `mobile/flutter_app/lib/integrations/backend_api/dto/settings_response_dto.dart`, `mobile/flutter_app/lib/features/settings/presentation/settings_panel.dart`, `mobile/flutter_app/test/backend_mvp_parity_dto_contract_test.dart`
+- QA script: `scripts/android-final-qa.sh`
 
-## 4) Non-UI Service Groundwork Already Added
+## 4) Verification Evidence (already run)
 
-Use these directly; do not duplicate service logic in UI.
+From `mobile/flutter_app`:
 
-### API client methods (source of truth)
-File: `mobile/flutter_app/lib/integrations/backend_api/api_client.dart`
+- `flutter analyze` -> PASS
+- `flutter test` -> PASS
+- `flutter build apk --debug` -> PASS
 
-- `fetchSettings`, `updateSettings`
-- `authenticateProvider`, `logoutProvider`
-- `createEvent`
-- `parseNaturalInput`, `createEventFromNaturalInput`
-- `fetchTodayBriefing`, `generateBriefingTtsBase64`, `generateBriefingTtsBinary`
-- `fetchColorPalette`, `fetchColorSchema`, `updateColorSchema`, `applyColorsToAll`, `fetchApplyColorsStatus`
+Notes:
 
-### Repository wrappers
-File: `mobile/flutter_app/lib/features/calendar/data/calendar_events_repository.dart`
+- Kotlin/Swift LSP diagnostics are unavailable in this Linux environment (`kotlin-lsp`, `sourcekit-lsp` not present).
+- iOS WidgetExtension build/runtime verification remains pending on macOS/Xcode.
 
-Same capabilities are wrapped there; UI should call repository layer.
+## 5) Remaining Next Steps (Execute in Order)
 
-### Added DTO contracts
-Directory: `mobile/flutter_app/lib/integrations/backend_api/dto/`
+1. Android real-device visual QA for mini-list density
+   - Validate readability and clipping for common widget sizes.
+   - Confirm events update after manual refresh and time progression.
 
-- `settings_response_dto.dart`
-- `provider_auth_response_dto.dart`
-- `create_event_response_dto.dart`
-- `natural_input_response_dto.dart`
-- `briefing_response_dto.dart`
-- `color_rule_dto.dart`
-- `colors_response_dto.dart`
+2. Android widget behavior sanity on lock/home hosts
+   - Confirm expected launcher behavior (whole-widget tap opens app).
+   - Re-confirm that per-event taps are not implemented by design.
 
-### Tests already added
-- `mobile/flutter_app/test/backend_mvp_parity_dto_contract_test.dart`
+3. iOS WidgetExtension validation on macOS/Xcode
+   - Build WidgetExtension target.
+   - Add widget in simulator/device.
+   - Verify family row counts, truncation, and snapshot refresh behavior.
 
-## 5) Feature Mapping (UI -> Endpoint -> Mobile Method)
+4. If UI clipping appears, tune list formatting only (no contract changes)
+   - Shorten time text and spacing.
+   - Keep snapshot schema unchanged.
 
-### A. Settings editor
-- Endpoints:
-  - `GET /api/settings`
-  - `PUT /api/settings`
-- Repository:
-  - `fetchSettings()`
-  - `updateSettings(...)`
-- Web reference:
-  - `web/frontend/src/app/page.tsx` (`loadSettings`, `saveSettings`)
+## 6) Explicit Constraints to Keep
 
-### B. Provider controls
-- Endpoints:
-  - `GET /api/providers`
-  - `GET /api/providers/status`
-  - `POST /api/providers/authenticate`
-  - `POST /api/providers/logout`
-  - `POST /api/providers/google/auth-url`
-  - `POST /api/providers/apple/credentials`
-- Repository:
-  - existing provider methods + auth/logout methods
+- Commit rule: title in English, body in Korean.
+- Delivery order: Android first, then iOS.
+- Keep model/contract translation in data/integration layers.
+- Keep platform widget implementation in native host targets (`android/`, `ios/`).
+- Do not rename backend fields or invent parallel DTO field names.
 
-Provider-specific flow rules:
-- Google must use `fetchGoogleAuthUrl(...)` -> external browser -> deep link callback (`smartanalog://auth/google`) -> refresh status.
-- Apple must use `setAppleCredentials(...)` then refresh status.
-- Do not use `POST /api/providers/authenticate` for Google (backend guides to auth-url path).
-
-### C. Event creation
-- Endpoint:
-  - `POST /api/events/create`
-- Repository:
-  - `createEvent(...)`
-
-### D. Natural input
-- Endpoints:
-  - `POST /api/events/natural-input/parse`
-  - `POST /api/events/natural-input/create`
-- Repository:
-  - `parseNaturalInput(...)`
-  - `createEventFromNaturalInput(...)`
-
-Validation constraints from backend:
-- input `text` max length: 500
-- parse can return `ready=false` with `reason`; UI must display reason and avoid create call.
-
-### E. Briefing + TTS
-- Endpoints:
-  - `GET /api/briefing/today`
-  - `POST /api/briefing/tts`
-  - `POST /api/briefing/tts/base64`
-- Repository:
-  - `fetchTodayBriefing(...)`
-  - `generateBriefingTtsBinary(...)`
-  - `generateBriefingTtsBase64(...)`
-
-MVP TTS policy (avoid hidden dependency decisions):
-- Required: TTS generation action must work.
-- Optional for this phase: in-app waveform/audio player.
-- If you add a playback dependency, record it explicitly in your milestone report with reason and platform impact.
-
-### F. Color schema management
-- Endpoints:
-  - `GET /api/colors/palette`
-  - `GET /api/colors/schema`
-  - `PUT /api/colors/schema`
-  - `POST /api/colors/apply-all`
-  - `GET /api/colors/apply-status`
-- Repository:
-  - `fetchColorPalette(...)`
-  - `fetchColorSchema(...)`
-  - `updateColorSchema(...)`
-  - `applyColorsToAll(...)`
-  - `fetchApplyColorsStatus(...)`
-- Web reference:
-  - `web/frontend/src/app/settings/color-schema/page.tsx`
-
-Known contract issue to handle before/while UI polling:
-- `GET /api/colors/apply-status` currently returns numeric timestamps in backend state (`last_started_at`, `last_finished_at`), while mobile DTO expects optional strings.
-- Files:
-  - backend: `web/backend/app/main.py`
-  - mobile DTO: `mobile/flutter_app/lib/integrations/backend_api/dto/colors_response_dto.dart`
-- Guard rule for UI implementer: do not block UI work on these fields; poll status using `running`, `queued`, `last_processed`, `last_updated` first. If timestamp parse mismatch appears, report immediately and isolate to contract-alignment patch.
-
-## 5.1) API Error Handling Contract
-
-- Backend non-2xx responses are surfaced by mobile client as `BackendApiException(statusCode, message)`.
-- UI must:
-  1. show user-facing message from `message`
-  2. keep screen usable (no crash)
-  3. support retry actions where appropriate
-- For provider/auth endpoints, treat `401/400` as actionable state (show auth CTA or credential guidance), not fatal screen errors.
-
-## 6) Do-Not-Touch Boundaries
-
-1. Do not rename backend JSON fields.
-2. Do not move contract parsing into presentation widgets.
-3. Do not put auth tokens into widget-readable snapshot files.
-4. Do not replace repository/api layers with direct HTTP from UI.
-5. Do not broaden scope beyond MVP parity features listed here.
-
-## 7) UI Implementation Sequence (Strict)
-
-Execute in this order:
-
-1. Settings + Provider controls
-2. Event create form
-3. Natural input parse/create flow
-4. Briefing display + TTS actions
-5. Color schema editor + apply-all + status poll
-6. Snapshot refresh hooks after successful actions affecting widget visuals
-
-For each step:
-- keep business translation in repository/data layer
-- only add UI/state orchestration in presentation
-- preserve existing deep-link/auth lifecycle behavior
-
-## 8) Minimal Screen/State Plan
-
-Default plan (unless you propose a better equivalent):
-- Keep `mobile_home_screen.dart` as primary integration surface initially.
-- Extract sub-widgets per feature to avoid a monolithic file.
-- Introduce lightweight UI state objects if needed, but avoid contract duplication.
-
-## 9) Acceptance Gates (Per Milestone)
-
-For each milestone and final pass:
+## 7) Quick Resume Commands
 
 ```bash
 cd /home/shine/projects/clock_widget/mobile/flutter_app
@@ -244,24 +112,22 @@ flutter test
 flutter build apk --debug
 ```
 
-Behavior checks:
-- Settings round-trip persists through backend.
-- Provider auth/logout reflects status correctly.
-- Event create updates today events.
-- Natural parse failure/success states are visible.
-- Briefing loads and TTS action executes with clear error handling.
-- Color schema updates and apply status are visible/pollable.
+Android with local backend in this repo setup:
 
-Android-first validation:
-- complete end-to-end on Android real device first.
-- then run equivalent iOS validation.
+```bash
+cd /home/shine/projects/clock_widget
+uv run uvicorn web.backend.app.main:app --host 0.0.0.0 --port 8000
+source ~/.zshrc
+cw-adb reverse tcp:8000 tcp:8000
+cw-flutter-run
+```
 
-## 10) Reporting Format to Human Reviewer
+Notes:
 
-After each milestone, report:
-1. What was implemented (file paths)
-2. What was intentionally not changed
-3. Verification commands and outcomes
-4. Risks/open questions (if any)
+- `cw-adb` and `cw-flutter-run` follow `CW_ANDROID_ADB_SOCKET` from `~/.zshrc` (default `5037`).
+- If you temporarily move to `5038` for conflict recovery, set both `ADB_SERVER_SOCKET` and `CW_ANDROID_ADB_SOCKET` to `tcp:127.0.0.1:5038` in the same shell.
 
-Keep reports concise and evidence-based.
+## 8) Optional Follow-up (Not Implemented)
+
+- Per-item deep links from mini-list rows to a filtered event detail screen.
+- Additional typography/spacing pass for extra-small launchers.

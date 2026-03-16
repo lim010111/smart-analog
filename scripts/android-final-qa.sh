@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT_DIR/mobile/flutter_app"
 
 BACKEND_URL="${CW_QA_BACKEND_URL:-http://127.0.0.1:8000}"
-ADB_SOCKET="${CW_QA_ADB_SOCKET:-tcp:127.0.0.1:5038}"
+ADB_SOCKET="${CW_QA_ADB_SOCKET:-tcp:127.0.0.1:5037}"
 DEVICE_ID="${CW_QA_DEVICE_ID:-R3CR10HFD7R}"
 APP_PACKAGE="${CW_QA_APP_PACKAGE:-com.smartanalog.flutter_app}"
 
@@ -113,7 +113,6 @@ result = {}
 s_code, settings_before = get(f'{base}/api/settings')
 patched = dict(settings_before)
 patched['clock_opacity'] = max(0, min(100, int(patched.get('clock_opacity', 100)) - 1))
-patched['widget_pinned'] = not bool(patched.get('widget_pinned', False))
 u_code, settings_patched = put_json(f'{base}/api/settings', patched)
 sa_code, settings_after = get(f'{base}/api/settings')
 _ = put_json(f'{base}/api/settings', settings_before)
